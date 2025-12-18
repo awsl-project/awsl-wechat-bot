@@ -479,11 +479,12 @@ class AWSlBot:
                 # 清理旧记录
                 self._cleanup_old_hashes()
 
-                time.sleep(config.CHECK_INTERVAL)
+                # 短暂延迟避免 CPU 占用过高，但保持快速响应
+                time.sleep(0.5)
 
             except Exception as e:
                 logger.error(f"消息检测出错: {e}")
-                time.sleep(config.CHECK_INTERVAL)
+                time.sleep(1)  # 出错时等待更长时间
 
         logger.info("消息检测线程退出")
 
@@ -564,7 +565,7 @@ class AWSlBot:
         logger.info("AWSL Bot 启动 (Accessibility API + 队列模式)")
         logger.info(f"监控群聊: {self.group_name}")
         logger.info(f"触发关键词: {config.TRIGGER_KEYWORD}")
-        logger.info(f"检查间隔: {config.CHECK_INTERVAL} 秒")
+        logger.info(f"检测间隔: 0.5 秒 (快速响应)")
         logger.info(f"响应冷却: {config.TRIGGER_COOLDOWN} 秒")
         logger.info(f"队列大小: 最多 10 条")
         logger.info("=" * 50)
