@@ -40,6 +40,7 @@ class CommandService:
             self.command_keys = [cmd['key'] for cmd in self.commands]
 
             logger.info(f"成功加载 {len(self.commands)} 个命令")
+            logger.info(f"命令列表: {self.command_keys}")
             return True
 
         except Exception as e:
@@ -59,28 +60,24 @@ class CommandService:
             - params: 命令参数（如果有）
         """
         text_lower = text.lower().strip()
+        logger.debug(f"尝试匹配命令: '{text_lower}'")
 
         # 按 key 长度从长到短排序，优先匹配长的命令（避免 "s" 匹配到 "ss"）
         sorted_keys = sorted(self.command_keys, key=len, reverse=True)
 
         for key in sorted_keys:
-            key_lower = key.lower()
+            key_lower = key.lower().strip()
 
-            # 如果 key 以空格结尾，表示需要参数
-            if key_lower.endswith(' '):
-                cmd_prefix = key_lower.rstrip()
-                # 检查是否匹配命令前缀
-                if text_lower.startswith(cmd_prefix + ' ') or text_lower.startswith(cmd_prefix):
-                    # 提取参数
-                    if len(text_lower) > len(cmd_prefix):
-                        params = text[len(cmd_prefix):].strip()
-                        if params:  # 确保有参数
-                            return (cmd_prefix, params)
-            else:
-                # 精确匹配（不需要参数的命令）
-                if text_lower == key_lower:
-                    return (key_lower, "")
+            # 前缀匹配
+            if text_lower.startswith(key_lower):
+                # 提取参数（如果有）
+                params = ""
+                if len(text_lower) > len(key_lower):
+                    params = text[len(key_lower):].strip()
+                logger.debug(f"匹配成功: 命令='{key_lower}', 参数='{params}'")
+                return (key_lower, params)
 
+        logger.debug(f"未找到匹配的命令")
         return None
 
     def execute_command(self, command_key: str, params: str = "") -> Optional[str]:
