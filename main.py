@@ -391,18 +391,16 @@ class AWSlBot:
                     - command模式时为(command_key, params)元组
                     - 其他为空字符串
         """
-        # 提取消息内容（去掉用户名前缀）
-        content = text
-        for delimiter in [':', '：']:
-            if delimiter in text:
-                parts = text.split(delimiter, 1)
-                if len(parts) > 1:
-                    content = parts[1].strip()
-                break
+        # 过滤包含 Animated Stickers 的消息（不区分大小写）
+        if "animated stickers" in text.lower():
+            return (None, "")
+
+        # 消息内容
+        content = text.strip()
+        content_lower = content.lower()
 
         # 检查是否为 awsl 触发词
         keyword_lower = config.TRIGGER_KEYWORD.lower()
-        content_lower = content.lower()
 
         # 特殊处理：awsl hp - 刷新命令列表
         if content_lower == f"{keyword_lower} hp":
