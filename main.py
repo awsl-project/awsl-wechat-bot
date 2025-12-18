@@ -22,9 +22,12 @@ from utils_accessibility_api import get_messages_via_accessibility
 from ai_service import AIService
 from command_service import CommandService
 
+# 根据配置设置日志级别
+log_level = logging.DEBUG if config.DEBUG else logging.INFO
+
 # 日志配置
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -445,8 +448,14 @@ class AWSlBot:
             try:
                 messages = self.wechat.get_messages()
 
-                logger.info("-" * 40)
-                logger.info(f"检测到 {len(messages)} 条消息")
+                # Debug 模式：输出所有检测到的消息
+                if config.DEBUG:
+                    logger.info("-" * 40)
+                    logger.info(f"检测到 {len(messages)} 条消息")
+                    if messages:
+                        logger.debug("所有消息:")
+                        for i, msg in enumerate(messages, 1):
+                            logger.debug(f"  [{i}] {msg}")
 
                 # 处理所有消息，找出未处理过的
                 new_messages = []
@@ -458,6 +467,7 @@ class AWSlBot:
 
                 # 处理所有新消息
                 if new_messages:
+                    logger.info("-" * 40)
                     logger.info(f"发现 {len(new_messages)} 条新消息")
                     for msg in new_messages:
                         logger.info(f"新消息: {msg}")
@@ -568,6 +578,7 @@ class AWSlBot:
         logger.info(f"检测间隔: 0.5 秒 (快速响应)")
         logger.info(f"响应冷却: {config.TRIGGER_COOLDOWN} 秒")
         logger.info(f"队列大小: 最多 10 条")
+        logger.info(f"调试模式: {'开启' if config.DEBUG else '关闭'}")
         logger.info("=" * 50)
 
         # 切换到目标群聊

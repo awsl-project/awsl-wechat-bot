@@ -30,6 +30,9 @@ class Config(BaseSettings):
     # 触发冷却时间（秒）
     TRIGGER_COOLDOWN: int = 10
 
+    # 调试模式（输出每次检测到的所有消息）
+    DEBUG: bool = False
+
     # 截图区域参数（暂时不使用，Accessibility API 不需要）
     SCREENSHOT_LEFT_RATIO: float = 0.30
     SCREENSHOT_TOP_RATIO: float = 0.06
