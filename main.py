@@ -84,7 +84,7 @@ class WeChatOCR:
         end tell
         '''
         result = subprocess.run(['osascript', '-e', script],
-                              capture_output=True, text=True, timeout=5)
+                              capture_output=True, text=True, timeout=15)
 
         if result.returncode != 0:
             logger.warning(f"获取窗口位置失败: {result.stderr}")
@@ -232,7 +232,10 @@ class WeChatOCR:
 
 
 class AWSlBot:
-    """AWSL 机器人 - 使用消息队列分离检测和处理"""
+    """AWSL 机器人 - 使用消息队列分离检测和处理
+
+    去重策略：结合上下文（前后消息）计算哈希值，避免相同内容但不同位置的消息被误判为重复
+    """
 
     def __init__(self, group_name: str):
         self.group_name = group_name
@@ -290,6 +293,27 @@ class AWSlBot:
         ''')
         self.conn.commit()
         logger.info(f"数据库初始化完成: {db_path}")
+
+    def _hash_message_with_context(self, messages: list, index: int) -> str:
+        """
+        结合上下文计算消息的唯一哈希值
+
+        Args:
+            messages: 完整消息列表
+            index: 当前消息的索引
+
+        Returns:
+            str: 包含上下文的哈希值
+        """
+        current = messages[index]
+        # 获取前一条消息（如果存在）
+        prev = messages[index - 1] if index > 0 else ""
+        # 获取后一条消息（如果存在）
+        next_msg = messages[index + 1] if index < len(messages) - 1 else ""
+
+        # 组合上下文：前一条 + 当前 + 后一条
+        context = f"{prev}|{current}|{next_msg}"
+        return str(hash(context))
 
     def _is_processed(self, msg_hash: str) -> bool:
         """检查消息是否已处理"""
@@ -439,8 +463,8 @@ class AWSlBot:
 
         # 初始化：记录当前所有消息避免重复触发
         initial_messages = self.wechat.get_messages()
-        for msg in initial_messages:
-            msg_hash = str(hash(msg))
+        for i, msg in enumerate(initial_messages):
+            msg_hash = self._hash_message_with_context(initial_messages, i)
             self._mark_processed(msg_hash)
         logger.info(f"已记录历史消息: {len(initial_messages)} 条")
 
@@ -451,20 +475,23 @@ class AWSlBot:
                 # Debug 模式：输出所有检测到的消息
                 if config.DEBUG:
                     logger.info("-" * 40)
-                    logger.info(f"检测到 {len(messages)} 条消息")
+                    logger.info(f"检测到 {len(messages)} 条消息（含重复）")
                     if messages:
                         logger.debug("所有消息:")
                         for i, msg in enumerate(messages, 1):
                             logger.debug(f"  [{i}] {msg}")
 
-                # 处理所有消息，找出未处理过的
+                # 处理所有消息，通过数据库历史记录去重（结合上下文）
                 new_messages = []
-                for msg in messages:
-                    msg_hash = str(hash(msg))
+                for i, msg in enumerate(messages):
+                    msg_hash = self._hash_message_with_context(messages, i)
                     is_processed = self._is_processed(msg_hash)
 
                     if config.DEBUG:
-                        logger.debug(f"  消息: {msg[:50]}... | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
+                        # 获取上下文预览
+                        prev = messages[i-1][:20] if i > 0 else "无"
+                        next_msg = messages[i+1][:20] if i < len(messages) - 1 else "无"
+                        logger.debug(f"  [{i}] 消息: {msg[:30]}... | 上文: {prev}... | 下文: {next_msg}... | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
 
                     if not is_processed:
                         new_messages.append(msg)
@@ -497,8 +524,14 @@ class AWSlBot:
                 # 短暂延迟避免 CPU 占用过高，但保持快速响应
                 time.sleep(0.5)
 
+            except subprocess.TimeoutExpired:
+                logger.error("⚠️ AppleScript 超时，跳过本次检测，将在下次重试")
+                time.sleep(2)  # 超时后等待更长时间再重试
             except Exception as e:
                 logger.error(f"消息检测出错: {e}")
+                import traceback
+                if config.DEBUG:
+                    traceback.print_exc()
                 time.sleep(1)  # 出错时等待更长时间
 
         logger.info("消息检测线程退出")

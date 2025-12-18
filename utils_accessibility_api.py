@@ -34,7 +34,7 @@ def get_messages_via_accessibility(process_name: str = "WeChat") -> list:
             ['osascript', script_path],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=20  # 增加超时时间，避免频繁超时
         )
 
         if result.returncode != 0:
@@ -62,7 +62,7 @@ def get_messages_via_accessibility(process_name: str = "WeChat") -> list:
         return []
 
     except subprocess.TimeoutExpired:
-        logger.error("AppleScript 执行超时")
+        logger.error("AppleScript 执行超时（20秒），可能是微信无响应或系统负载过高")
         return []
     except Exception as e:
         logger.error(f"获取消息异常: {e}")
