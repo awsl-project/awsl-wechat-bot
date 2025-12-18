@@ -56,7 +56,7 @@ class CommandService:
 
         Returns:
             Tuple[command_key, params] 或 None
-            - command_key: 命令的 key（不含空格）
+            - command_key: 命令的 key
             - params: 命令参数（如果有）
         """
         text_lower = text.lower().strip()
@@ -66,16 +66,13 @@ class CommandService:
         sorted_keys = sorted(self.command_keys, key=len, reverse=True)
 
         for key in sorted_keys:
-            key_lower = key.lower().strip()
+            key_lower = key.lower()
 
             # 前缀匹配
             if text_lower.startswith(key_lower):
-                # 提取参数（如果有）
-                params = ""
-                if len(text_lower) > len(key_lower):
-                    params = text[len(key_lower):].strip()
-                logger.debug(f"匹配成功: 命令='{key_lower}', 参数='{params}'")
-                return (key_lower, params)
+                params = text[len(key):].strip()
+                logger.debug(f"匹配成功: 命令='{key}', 参数='{params}'")
+                return (key, params)
 
         logger.debug(f"未找到匹配的命令")
         return None
