@@ -95,25 +95,28 @@ class CommandService:
             str: 命令执行结果文本，失败返回 None
         """
         try:
-            # 构建 API URL - 使用新的格式 /api/command?command=xx
+            # 构建 API URL
             url = f"{self.api_base_url}/api/command"
-            query_params = {'command': command_key}
 
-            # 如果有参数，添加 q 参数
+            # 构建完整的命令字符串（命令 + 参数）
+            full_command = command_key
             if params:
-                query_params['q'] = params
+                full_command = f"{command_key} {params}"
+
+            # query string 只包含 command 参数
+            query_params = {'command': full_command}
 
             logger.info(f"调用命令 API: {url} with params: {query_params}")
 
             response = requests.get(
                 url,
                 params=query_params,
-                headers={'accept': '*/*'},
+                headers={'accept': 'application/json'},
                 timeout=15
             )
             response.raise_for_status()
 
-            # 解析响应 - 新的 API 返回格式 {"content": "...", "type": "text"}
+            # 解析响应 - API 返回格式 {"content": "...", "type": "text"}
             data = response.json()
             response_content = data.get('content', '')
 
