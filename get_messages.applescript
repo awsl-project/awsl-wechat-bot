@@ -87,8 +87,8 @@ on run
 				if (count of windows) > 0 then
 					set mainWindow to window 1
 
-					-- 查找消息列表
-					set messagesList to my findMessagesList(mainWindow, 0, 15)
+					-- 查找消息列表（优化：降低递归深度从15到10）
+					set messagesList to my findMessagesList(mainWindow, 0, 10)
 
 					if messagesList is not missing value then
 						-- 提取所有消息

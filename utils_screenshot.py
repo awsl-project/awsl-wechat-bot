@@ -19,7 +19,12 @@ def get_window_info(process_name: str = "WeChat") -> dict:
         end tell
     end tell
     '''
-    result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+    try:
+        result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=Config.APPLESCRIPT_TIMEOUT_SHORT)
+    except subprocess.TimeoutExpired:
+        print(f"获取窗口信息超时（{Config.APPLESCRIPT_TIMEOUT_SHORT}秒）")
+        return None
+
     if result.returncode == 0:
         parts = result.stdout.strip().split(',')
         return {

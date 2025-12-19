@@ -6,6 +6,7 @@ Accessibility API 工具 - 使用 macOS Accessibility API 获取微信消息
 import subprocess
 import os
 import logging
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ def get_messages_via_accessibility(process_name: str = "WeChat") -> list:
             ['osascript', script_path],
             capture_output=True,
             text=True,
-            timeout=20  # 增加超时时间，避免频繁超时
+            timeout=config.APPLESCRIPT_TIMEOUT_MEDIUM  # 消息获取使用中等超时
         )
 
         if result.returncode != 0:
@@ -62,7 +63,10 @@ def get_messages_via_accessibility(process_name: str = "WeChat") -> list:
         return []
 
     except subprocess.TimeoutExpired:
-        logger.error("AppleScript 执行超时（20秒），可能是微信无响应或系统负载过高")
+        logger.error(f"AppleScript 执行超时（{config.APPLESCRIPT_TIMEOUT_MEDIUM}秒），可能原因：")
+        logger.error("  1. 微信无响应或卡顿")
+        logger.error("  2. 系统负载过高")
+        logger.error("  3. UI结构复杂，遍历时间过长")
         return []
     except Exception as e:
         logger.error(f"获取消息异常: {e}")

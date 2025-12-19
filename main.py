@@ -58,7 +58,7 @@ class WeChatOCR:
             ['osascript', '-e', script],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=config.APPLESCRIPT_TIMEOUT_LONG
         )
         if result.returncode != 0:
             logger.debug(f"AppleScript 错误: {result.stderr}")
@@ -83,8 +83,12 @@ class WeChatOCR:
             end tell
         end tell
         '''
-        result = subprocess.run(['osascript', '-e', script],
-                              capture_output=True, text=True, timeout=15)
+        try:
+            result = subprocess.run(['osascript', '-e', script],
+                                  capture_output=True, text=True, timeout=config.APPLESCRIPT_TIMEOUT_SHORT)
+        except subprocess.TimeoutExpired:
+            logger.warning(f"获取窗口位置超时（{config.APPLESCRIPT_TIMEOUT_SHORT}秒）")
+            return False
 
         if result.returncode != 0:
             logger.warning(f"获取窗口位置失败: {result.stderr}")
@@ -206,7 +210,12 @@ class WeChatOCR:
             set the clipboard to (read theFile as «class PNGf»)
         end try
         '''
-        result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+        try:
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=config.APPLESCRIPT_TIMEOUT_SHORT)
+        except subprocess.TimeoutExpired:
+            logger.error(f"复制图片到剪贴板超时（{config.APPLESCRIPT_TIMEOUT_SHORT}秒）")
+            return False
+
         if result.returncode != 0:
             logger.error(f"复制图片失败: {result.stderr}")
             return False

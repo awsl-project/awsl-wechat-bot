@@ -33,6 +33,11 @@ class Config(BaseSettings):
     # 调试模式（输出每次检测到的所有消息）
     DEBUG: bool = False
 
+    # AppleScript 超时配置（秒）
+    APPLESCRIPT_TIMEOUT_SHORT: int = 10   # 简单操作: 窗口位置、图片复制
+    APPLESCRIPT_TIMEOUT_MEDIUM: int = 20  # 中等操作: 消息获取
+    APPLESCRIPT_TIMEOUT_LONG: int = 30    # 复杂操作: 深度UI遍历、窗口激活
+
     # 截图区域参数（暂时不使用，Accessibility API 不需要）
     SCREENSHOT_LEFT_RATIO: float = 0.30
     SCREENSHOT_TOP_RATIO: float = 0.06
