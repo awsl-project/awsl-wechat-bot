@@ -589,8 +589,8 @@ class AWSlBot:
                 # 清理旧记录
                 self._cleanup_old_hashes()
 
-                # 短暂延迟避免 CPU 占用过高，但保持快速响应
-                time.sleep(0.5)
+                # 使用配置的检查间隔
+                time.sleep(config.CHECK_INTERVAL)
 
             except subprocess.TimeoutExpired:
                 logger.error("⚠️ AppleScript 超时，跳过本次检测，将在下次重试")
@@ -681,7 +681,7 @@ class AWSlBot:
         logger.info("AWSL Bot 启动 (Accessibility API + 队列模式)")
         logger.info(f"监控群聊: {self.group_name}")
         logger.info(f"触发关键词: {config.TRIGGER_KEYWORD}")
-        logger.info(f"检测间隔: 0.5 秒 (快速响应)")
+        logger.info(f"检测间隔: {config.CHECK_INTERVAL} 秒")
         logger.info(f"响应冷却: {config.TRIGGER_COOLDOWN} 秒")
         logger.info(f"队列大小: 最多 10 条")
         logger.info(f"调试模式: {'开启' if config.DEBUG else '关闭'}")
