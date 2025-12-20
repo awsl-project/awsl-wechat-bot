@@ -4,9 +4,9 @@ import re
 import os
 import logging
 import Quartz
-from adapters.base import BaseWeChatAdapter
+from src.adapters.base import BaseWeChatAdapter
 from config import config
-from utils_accessibility_api import get_messages_via_accessibility
+from src.utils.accessibility import get_messages_via_accessibility
 
 logger = logging.getLogger(__name__)
 

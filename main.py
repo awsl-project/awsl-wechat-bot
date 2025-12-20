@@ -18,9 +18,9 @@ import queue
 import threading
 
 from config import config
-from adapters import get_wechat_adapter
-from ai_service import AIService
-from command_service import CommandService
+from src.adapters import get_wechat_adapter
+from src.services.ai import AIService
+from src.services.command import CommandService
 
 # 根据配置设置日志级别
 log_level = logging.DEBUG if config.DEBUG else logging.INFO

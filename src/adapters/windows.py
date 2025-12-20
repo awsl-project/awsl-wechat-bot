@@ -2,7 +2,7 @@ import time
 import logging
 import re
 import uiautomation as auto
-from adapters.base import BaseWeChatAdapter
+from src.adapters.base import BaseWeChatAdapter
 from config import config
 
 logger = logging.getLogger(__name__)

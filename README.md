@@ -187,17 +187,25 @@ python main.py
 awsl-wechat-bot/
 ├── main.py                      # 主程序入口和机器人逻辑
 ├── config.py                    # 配置文件（使用 Pydantic Settings）
-├── ai_service.py                # AI 服务模块
-├── command_service.py           # 动态命令服务模块
-├── adapters/                    # 平台适配器
-│   ├── base.py                  # 适配器基类
-│   ├── macos.py                 # macOS 实现 (Accessibility API)
-│   └── windows.py               # Windows 实现 (UI Automation)
-├── utils_accessibility_api.py   # Accessibility API 工具 (macOS)
-├── utils_ocr.py                 # OCR 相关工具（备用）
-├── utils_screenshot.py          # 截图工具（备用）
-├── get_messages.applescript     # 获取消息的 AppleScript
+├── src/                         # 源代码目录
+│   ├── adapters/                # 平台适配器
+│   │   ├── base.py              # 适配器基类
+│   │   ├── macos.py             # macOS 实现 (Accessibility API)
+│   │   └── windows.py           # Windows 实现 (UI Automation)
+│   ├── services/                # 服务模块
+│   │   ├── ai.py                # AI 服务模块
+│   │   └── command.py           # 动态命令服务模块
+│   ├── utils/                   # 工具模块
+│   │   ├── accessibility.py     # Accessibility API 工具 (macOS)
+│   │   ├── ocr.py               # OCR 相关工具（备用）
+│   │   └── screenshot.py        # 截图工具（备用）
+│   └── scripts/                 # 脚本文件
+│       └── get_messages.applescript  # 获取消息的 AppleScript
+├── tools/                       # 调试工具
+│   ├── inspect_wechat.py        # 微信窗口检查工具
+│   └── debug_windows.py         # Windows 调试工具
 ├── requirements.txt             # Python 依赖
+├── start.sh                     # 启动脚本
 ├── .env                         # 环境变量配置（不提交到 Git）
 ├── .env.example                 # 环境变量配置模板
 ├── messages.db                  # 消息去重数据库（自动生成）
