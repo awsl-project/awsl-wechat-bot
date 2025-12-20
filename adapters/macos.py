@@ -10,6 +10,19 @@ from utils_accessibility_api import get_messages_via_accessibility
 
 logger = logging.getLogger(__name__)
 
+
+class MacOSWindow:
+    """macOS 单群模式的虚拟窗口对象"""
+
+    def __init__(self, adapter, group_name: str):
+        self.adapter = adapter
+        self.group_name = group_name
+
+    def Exists(self, timeout: float = 0.5) -> bool:
+        """检查窗口是否存在（macOS 单群模式始终返回 True）"""
+        return True
+
+
 class MacOSWeChatAdapter(BaseWeChatAdapter):
     def __init__(self):
         self.process_name = self._detect_wechat_process()
@@ -46,13 +59,31 @@ class MacOSWeChatAdapter(BaseWeChatAdapter):
         time.sleep(0.3)
 
     def find_all_wechat_windows(self) -> list[dict]:
-        """查找所有微信窗口（macOS 暂不支持多窗口监听）
+        """查找所有微信窗口（macOS 单群模式）
 
         Returns:
-            list[dict]: 空列表（macOS 版本暂不支持多窗口）
+            list[dict]: 包含单个群聊窗口的列表
         """
-        logger.warning("macOS 版本暂不支持多窗口监听功能")
-        return []
+        group_name = config.GROUP_NAME
+        if not group_name:
+            logger.error("macOS 需要在 .env 中配置 GROUP_NAME")
+            return []
+
+        # 切换到目标群聊
+        self.find_chat(group_name)
+
+        # 返回虚拟窗口对象
+        window = MacOSWindow(self, group_name)
+        logger.info(f"macOS 单群模式: 监听 [{group_name}]")
+        return [{"title": group_name, "window": window}]
+
+    def get_messages_from_window(self, window: MacOSWindow) -> list:
+        """从指定窗口获取消息（macOS 单群模式）"""
+        return self.get_messages()
+
+    def send_text_to_window(self, window: MacOSWindow, text: str) -> bool:
+        """向指定窗口发送消息（macOS 单群模式）"""
+        return self.send_text(text)
 
     def click_input_box(self):
         """点击输入框以获得焦点"""

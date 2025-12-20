@@ -9,6 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Config(BaseSettings):
     """配置类 - 自动从环境变量读取"""
 
+    # 群聊名称（macOS 单群模式使用）
+    GROUP_NAME: str = ""
+
     # 触发关键词
     TRIGGER_KEYWORD: str = "awsl"
 
