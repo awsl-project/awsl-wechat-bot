@@ -45,6 +45,15 @@ class MacOSWeChatAdapter(BaseWeChatAdapter):
         subprocess.run(['open', '-a', self.process_name], check=True)
         time.sleep(0.3)
 
+    def find_all_wechat_windows(self) -> list[dict]:
+        """查找所有微信窗口（macOS 暂不支持多窗口监听）
+
+        Returns:
+            list[dict]: 空列表（macOS 版本暂不支持多窗口）
+        """
+        logger.warning("macOS 版本暂不支持多窗口监听功能")
+        return []
+
     def click_input_box(self):
         """点击输入框以获得焦点"""
         script = f'''

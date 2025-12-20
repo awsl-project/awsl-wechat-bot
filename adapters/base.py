@@ -27,3 +27,14 @@ class BaseWeChatAdapter(ABC):
     def activate_window(self):
         """激活微信窗口"""
         pass
+
+    @abstractmethod
+    def find_all_wechat_windows(self) -> list[dict]:
+        """查找所有微信窗口（用于多群监听）
+
+        Returns:
+            list[dict]: 窗口信息列表，每个字典包含：
+                - title: 窗口标题（群名）
+                - window: 窗口控制对象
+        """
+        pass

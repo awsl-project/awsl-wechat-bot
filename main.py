@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-AWSL 微信机器人 - 支持多平台
-监控指定群聊，检测到 "awsl" 消息时自动发送随机图片或AI回复
+AWSL 微信机器人 - 支持多平台、多群监听
+监控多个群聊，检测到 "awsl" 消息时自动发送随机图片或AI回复
 """
 
 import os
@@ -34,18 +34,20 @@ logger = logging.getLogger(__name__)
 
 
 class AWSlBot:
-    """AWSL 机器人 - 使用消息队列分离检测和处理"""
+    """AWSL 机器人 - 支持多群监听"""
 
-    def __init__(self, group_name: str):
-        self.group_name = group_name
+    def __init__(self):
         self.wechat = get_wechat_adapter()
         self.max_cache = 200
 
-        # 消息队列（最多10个待处理消息）
-        self.message_queue = queue.Queue(maxsize=10)
+        # 群组配置（将在启动时初始化）
+        self.groups = []  # [{"name": "群名", "window": WindowControl对象, "thread": Thread对象}]
 
-        # 冷却控制
-        self.last_trigger_time = 0
+        # 消息队列（最多30个待处理消息，因为有多个群）
+        self.message_queue = queue.Queue(maxsize=30)
+
+        # 群级别的冷却控制
+        self.last_trigger_time = {}  # {group_name: timestamp}
         self.cooldown_lock = threading.Lock()
 
         # 数据库锁（保护数据库操作）
@@ -53,7 +55,7 @@ class AWSlBot:
 
         # 运行控制
         self.running = False
-        self.detector_thread = None
+        self.detector_threads = []  # 每个群一个检测线程
         self.processor_thread = None
         self.scheduler_thread = None
 
@@ -77,23 +79,42 @@ class AWSlBot:
             logger.warning(f"命令服务初始化失败: {e}")
             self.command_service = None
 
-        logger.info(f"AWSL Bot 初始化完成，监控群聊: {group_name}")
+        logger.info("AWSL Bot 初始化完成")
 
     def _init_db(self):
-        """初始化 SQLite 数据库"""
+        """初始化 SQLite 数据库（支持群级别去重）"""
         db_path = os.path.join(os.path.dirname(__file__), 'messages.db')
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+
+        # 检查是否需要迁移旧表结构
+        cursor = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='message_hashes'"
+        )
+        if cursor.fetchone():
+            # 检查是否已经有 group_name 字段
+            cursor = self.conn.execute("PRAGMA table_info(message_hashes)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'group_name' not in columns:
+                logger.info("检测到旧数据库结构，正在迁移...")
+                # 删除旧表，重新创建
+                self.conn.execute("DROP TABLE message_hashes")
+                self.conn.commit()
+
+        # 创建新表结构（包含 group_name）
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS message_hashes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                hash TEXT UNIQUE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                group_name TEXT NOT NULL,
+                hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(group_name, hash)
             )
         ''')
         self.conn.commit()
+        logger.debug("数据库初始化完成")
 
-    def _hash_message_with_context(self, messages: list, index: int) -> str:
-        """结合前向上下文计算消息的唯一哈希值"""
+    def _hash_message_with_context(self, messages: list, index: int, group_name: str) -> str:
+        """结合前向上下文和群名计算消息的唯一哈希值"""
         current = messages[index]
         context_size = 2
         context_parts = []
@@ -101,22 +122,25 @@ class AWSlBot:
             context_parts.append(messages[i])
         context_parts.append(current)
         context = "|".join(context_parts)
-        return str(hash(context))
+        # 包含群名，避免不同群的相同消息被误判为重复
+        return str(hash(f"{group_name}:{context}"))
 
-    def _is_processed(self, msg_hash: str) -> bool:
-        """检查消息是否已处理"""
+    def _is_processed(self, msg_hash: str, group_name: str) -> bool:
+        """检查消息是否已处理（群级别）"""
         with self.db_lock:
             cursor = self.conn.execute(
-                'SELECT 1 FROM message_hashes WHERE hash = ?', (msg_hash,)
+                'SELECT 1 FROM message_hashes WHERE hash = ? AND group_name = ?',
+                (msg_hash, group_name)
             )
             return cursor.fetchone() is not None
 
-    def _mark_processed(self, msg_hash: str):
-        """标记消息为已处理"""
+    def _mark_processed(self, msg_hash: str, group_name: str):
+        """标记消息为已处理（群级别）"""
         with self.db_lock:
             try:
                 self.conn.execute(
-                    'INSERT OR IGNORE INTO message_hashes (hash) VALUES (?)', (msg_hash,)
+                    'INSERT OR IGNORE INTO message_hashes (hash, group_name) VALUES (?, ?)',
+                    (msg_hash, group_name)
                 )
                 self.conn.commit()
             except sqlite3.Error as e:
@@ -181,8 +205,17 @@ class AWSlBot:
                 return ("command", cmd_match)
         return (None, "")
 
+    def can_trigger(self, group_name: str) -> bool:
+        """检查指定群是否在冷却期"""
+        last_time = self.last_trigger_time.get(group_name, 0)
+        return time.time() - last_time >= config.TRIGGER_COOLDOWN
+
+    def mark_triggered(self, group_name: str):
+        """标记指定群已触发"""
+        self.last_trigger_time[group_name] = time.time()
+
     def scheduler_loop(self):
-        """定时任务调度循环"""
+        """定时任务调度循环（广播到所有群）"""
         logger.info("定时任务调度线程启动")
         tasks = config.SCHEDULED_TASKS
         if not tasks:
@@ -207,140 +240,265 @@ class AWSlBot:
                     command_name = task.get('command')
                     if not content and not command_name:
                         continue
+                    should_trigger = False
                     if task_type == 'interval':
                         if now - task_states.get(i, 0) >= task.get('seconds', 3600):
-                            self._queue_task(task, now, i)
+                            should_trigger = True
                             task_states[i] = now
                     elif task_type == 'daily':
                         if current_time_str == task.get('time') and task_states.get(i, "") != current_date_str:
-                            self._queue_task(task, now, i)
+                            should_trigger = True
                             task_states[i] = current_date_str
+
+                    if should_trigger:
+                        self._broadcast_task(task, now, i)
+
                 time.sleep(1)
             except Exception as e:
                 logger.error(f"调度线程出错: {e}")
                 time.sleep(5)
 
-    def _queue_task(self, task, now, i):
+    def _broadcast_task(self, task, now, task_index):
+        """将定时任务广播到所有群"""
         content = task.get('content')
         command_name = task.get('command')
-        try:
-            if command_name:
-                logger.info(f"⏰ 触发定时命令[{i}]: {command_name}")
-                self.message_queue.put_nowait({
-                    'type': 'command',
-                    'content': (command_name, task.get('params', '')),
-                    'timestamp': now
-                })
-            else:
-                logger.info(f"⏰ 触发定时消息[{i}]: {content}")
-                self.message_queue.put_nowait({
-                    'type': 'text',
-                    'content': content,
-                    'timestamp': now
-                })
-        except queue.Full:
-            logger.warning("⚠ 队列已满，跳过任务")
 
-    def message_detector_loop(self):
-        """消息检测循环"""
-        logger.info("消息检测线程启动")
-        initial_messages = self.wechat.get_messages()
-        for i, msg in enumerate(initial_messages):
-            self._mark_processed(self._hash_message_with_context(initial_messages, i))
+        # 遍历所有活跃的群
+        for group in self.groups:
+            # 检查窗口是否仍然存在
+            if not group["window"].Exists(0.5):
+                logger.debug(f"群 [{group['name']}] 窗口已关闭，跳过定时任务")
+                continue
+
+            try:
+                if command_name:
+                    logger.info(f"⏰ 触发定时命令[{task_index}] 到 [{group['name']}]: {command_name}")
+                    self.message_queue.put_nowait({
+                        'type': 'command',
+                        'group_name': group['name'],
+                        'window': group['window'],
+                        'content': (command_name, task.get('params', '')),
+                        'timestamp': now
+                    })
+                else:
+                    logger.info(f"⏰ 触发定时消息[{task_index}] 到 [{group['name']}]: {content}")
+                    self.message_queue.put_nowait({
+                        'type': 'text',
+                        'group_name': group['name'],
+                        'window': group['window'],
+                        'content': content,
+                        'timestamp': now
+                    })
+            except queue.Full:
+                logger.warning(f"⚠ 队列已满，跳过群 [{group['name']}] 的任务")
+
+    def message_detector_loop(self, group_name: str, window):
+        """单个群的消息检测循环"""
+        logger.info(f"[{group_name}] 消息检测线程启动")
+
+        # 初始化：标记当前所有消息为已处理
+        try:
+            initial_messages = self.wechat.get_messages_from_window(window)
+            for i, msg in enumerate(initial_messages):
+                self._mark_processed(
+                    self._hash_message_with_context(initial_messages, i, group_name),
+                    group_name
+                )
+            logger.debug(f"[{group_name}] 已标记 {len(initial_messages)} 条初始消息")
+        except Exception as e:
+            logger.error(f"[{group_name}] 初始化失败: {e}")
+
         while self.running:
             try:
-                messages = self.wechat.get_messages()
+                # 检查窗口是否仍然存在
+                if not window.Exists(0.5):
+                    logger.warning(f"[{group_name}] 窗口已关闭，停止监听")
+                    break
+
+                # 获取消息
+                messages = self.wechat.get_messages_from_window(window)
                 messages_to_check = messages[-3:] if len(messages) > 3 else messages
                 start_index = len(messages) - len(messages_to_check)
+
+                # 检查新消息
                 new_messages = []
                 for i, msg in enumerate(messages_to_check):
-                    msg_hash = self._hash_message_with_context(messages, start_index + i)
-                    if not self._is_processed(msg_hash):
+                    msg_hash = self._hash_message_with_context(messages, start_index + i, group_name)
+                    if not self._is_processed(msg_hash, group_name):
                         new_messages.append((msg, msg_hash))
+
+                # 处理新消息
                 for msg, msg_hash in new_messages:
-                    self._mark_processed(msg_hash)
+                    self._mark_processed(msg_hash, group_name)
                     trigger_type, content = self.is_trigger(msg)
                     if trigger_type:
+                        logger.info(f"[{group_name}] 检测到触发: {msg}")
                         try:
                             self.message_queue.put_nowait({
                                 'type': trigger_type,
+                                'group_name': group_name,
+                                'window': window,
                                 'content': content,
+                                'original_message': msg,
                                 'timestamp': time.time()
                             })
                         except queue.Full:
-                            pass
+                            logger.warning(f"[{group_name}] 队列已满，跳过消息")
+
                 self._cleanup_old_hashes()
                 time.sleep(config.CHECK_INTERVAL)
             except Exception as e:
-                logger.error(f"检测出错: {e}")
+                logger.error(f"[{group_name}] 检测出错: {e}")
                 time.sleep(1)
 
+        logger.info(f"[{group_name}] 消息检测线程退出")
+
     def message_processor_loop(self):
-        """消息处理循环"""
+        """消息处理循环（串行发送）"""
         logger.info("消息处理线程启动")
         while self.running:
             try:
                 task = self.message_queue.get(timeout=1)
                 trigger_type = task['type']
                 content = task['content']
-                if trigger_type == "text":
-                    with self.cooldown_lock:
-                        self.wechat.send_text(content)
-                        self.last_trigger_time = time.time()
+                group_name = task['group_name']
+                window = task['window']
+
+                # 检查窗口是否仍然存在
+                if not window.Exists(0.5):
+                    logger.warning(f"[{group_name}] 目标窗口已关闭，跳过消息")
                     self.message_queue.task_done()
                     continue
+
+                # 处理文本消息（定时任务）
+                if trigger_type == "text":
+                    with self.cooldown_lock:
+                        self.wechat.send_text_to_window(window, content)
+                        self.mark_triggered(group_name)
+                    self.message_queue.task_done()
+                    continue
+
+                # 冷却控制（按群区分）
                 with self.cooldown_lock:
-                    remaining = config.TRIGGER_COOLDOWN - (time.time() - self.last_trigger_time)
-                    if remaining > 0:
+                    if not self.can_trigger(group_name):
+                        remaining = config.TRIGGER_COOLDOWN - (time.time() - self.last_trigger_time.get(group_name, 0))
+                        logger.debug(f"[{group_name}] 冷却中，等待 {remaining:.1f} 秒")
                         time.sleep(remaining)
+
+                    # 处理命令
                     if trigger_type == "command" and self.command_service:
+                        logger.info(f"[{group_name}] 执行命令: {content[0]}")
                         res = self.command_service.execute_command(content[0], content[1])
-                        self.wechat.send_text(res if res else "执行失败")
+                        self.wechat.send_text_to_window(window, res if res else "执行失败")
+                    # 刷新命令列表
                     elif trigger_type == "command_refresh":
+                        logger.info(f"[{group_name}] 刷新命令列表")
                         if self.command_service.load_commands():
-                            self.wechat.send_text("已经成功了")
+                            self.wechat.send_text_to_window(window, "已经成功了")
+                    # AI 回复
                     elif trigger_type == "ai" and self.ai_service:
+                        logger.info(f"[{group_name}] AI回复: {content}")
                         ans = self.ai_service.ask(content)
-                        self.wechat.send_text(ans if ans else "抱歉，我现在无法回答这个问题 😅")
-                    self.last_trigger_time = time.time()
+                        self.wechat.send_text_to_window(window, ans if ans else "抱歉，我现在无法回答这个问题 😅")
+
+                    self.mark_triggered(group_name)
+
                 self.message_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.error(f"处理出错: {e}")
+                logger.error(f"处理出错: {e}", exc_info=True)
+
+    def select_groups_interactive(self) -> list[dict]:
+        """自动选择所有打开的群聊窗口"""
+        # 扫描所有微信窗口
+        windows = self.wechat.find_all_wechat_windows()
+
+        if not windows:
+            logger.error("未找到任何群聊窗口！")
+            logger.info("提示：请先打开微信，并双击弹出要监听的群聊窗口")
+            return []
+
+        # 显示所有窗口
+        print(f"\n发现 {len(windows)} 个群聊窗口：")
+        for i, w in enumerate(windows, 1):
+            print(f"  [{i}] {w['title']}")
+
+        # 自动监听全部
+        logger.info("自动监听所有群聊窗口")
+        return windows
 
     def run(self):
         """运行机器人"""
-        # 激活微信窗口并切换到目标群聊
-        self.wechat.activate_window()
-        time.sleep(0.5)
+        # 选择要监听的群
+        selected_windows = self.select_groups_interactive()
 
-        # 切换到指定群聊
-        if hasattr(self.wechat, 'find_chat'):
-            logger.info(f"正在切换到群聊: {self.group_name}")
-            self.wechat.find_chat(self.group_name)
-            time.sleep(1)
+        if not selected_windows:
+            logger.error("没有可监听的群聊，程序退出")
+            return
 
+        # 初始化群组配置
+        print(f"\n已选择 {len(selected_windows)} 个群：")
+        for w in selected_windows:
+            self.groups.append({
+                "name": w["title"],
+                "window": w["window"],
+                "thread": None
+            })
+            print(f"  - {w['title']}")
+            # 初始化冷却时间
+            self.last_trigger_time[w["title"]] = 0
+
+        # 启动所有线程
+        print("\n正在启动监听...")
         self.running = True
-        self.detector_thread = threading.Thread(target=self.message_detector_loop, daemon=True)
+
+        # 为每个群创建检测线程
+        for group in self.groups:
+            thread = threading.Thread(
+                target=self.message_detector_loop,
+                args=(group["name"], group["window"]),
+                daemon=True
+            )
+            thread.start()
+            group["thread"] = thread
+            logger.info(f"已启动检测线程: {group['name']}")
+
+        # 启动处理线程
         self.processor_thread = threading.Thread(target=self.message_processor_loop, daemon=True)
-        self.scheduler_thread = threading.Thread(target=self.scheduler_loop, daemon=True)
-        self.detector_thread.start()
         self.processor_thread.start()
+        logger.info("已启动处理线程")
+
+        # 启动调度线程
+        self.scheduler_thread = threading.Thread(target=self.scheduler_loop, daemon=True)
         self.scheduler_thread.start()
+        logger.info("已启动调度线程")
+
+        print(f"\n✓ 正在监听 {len(self.groups)} 个群...")
+        print("按 Ctrl+C 停止监听\n")
+
+        # 主循环
         try:
             while True:
                 time.sleep(1)
+                # 检查是否所有检测线程都已退出
+                alive_threads = [g for g in self.groups if g["thread"].is_alive()]
+                if not alive_threads:
+                    logger.warning("所有检测线程已退出")
+                    break
         except KeyboardInterrupt:
+            logger.info("收到停止信号")
             self.running = False
+
 
 def main():
     try:
-        bot = AWSlBot(config.GROUP_NAME)
+        bot = AWSlBot()
         bot.run()
     except Exception as e:
-        logger.error(f"启动失败: {e}")
+        logger.error(f"启动失败: {e}", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
