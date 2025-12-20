@@ -1,5 +1,7 @@
 # AWSL 微信机器人
 
+> ⚠️ **免责声明：本项目仅供学习交流，请勿用于商业或违规用途。使用本项目产生的任何后果由使用者自行承担。**
+
 基于 macOS Accessibility API 和 Windows UI Automation 的微信群聊机器人，支持 AI 智能回答和动态命令执行。
 
 ## 功能特性
@@ -309,6 +311,22 @@ DEBUG 模式会输出：
 - 触发逻辑的判断过程
 
 **建议**：生产环境关闭 DEBUG 模式以减少日志输出，仅在调试时开启。
+
+## 免责声明
+
+**本项目仅供学习交流使用，请勿用于商业用途或任何违法违规行为。**
+
+- 本项目是一个技术学习和研究项目，旨在探索 macOS Accessibility API 和 Windows UI Automation 技术
+- 使用本项目时请遵守微信的使用条款和相关法律法规
+- 开发者不对使用本项目造成的任何后果负责
+- 请勿将本项目用于：
+  - 发送垃圾信息或骚扰他人
+  - 传播违法违规内容
+  - 任何商业盈利目的
+  - 其他可能违反微信使用条款的行为
+- 如因使用本项目产生任何问题，责任由使用者自行承担
+
+**By using this project, you agree that you understand these terms and will use it responsibly for educational purposes only.**
 
 ## 许可证
 
