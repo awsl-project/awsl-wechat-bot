@@ -1,7 +1,9 @@
 # AWSL 微信机器人依赖
 requests>=2.28.0
-pyobjc-framework-Vision>=9.0
-pyobjc-framework-Quartz>=9.0
-pyobjc-framework-Cocoa>=9.0
+pyobjc-framework-Vision>=9.0; sys_platform == 'darwin'
+pyobjc-framework-Quartz>=9.0; sys_platform == 'darwin'
+pyobjc-framework-Cocoa>=9.0; sys_platform == 'darwin'
+uiautomation>=2.0.0; sys_platform == 'win32'
+Pillow>=9.0.0; sys_platform == 'win32'
 pydantic>=2.0.0
 pydantic-settings>=2.0.0

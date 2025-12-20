@@ -1,10 +1,13 @@
 # AWSL 微信机器人
 
-基于 macOS Accessibility API 的微信群聊机器人，支持 AI 智能回答和动态命令执行。
+基于 macOS Accessibility API 和 Windows UI Automation 的微信群聊机器人，支持 AI 智能回答和动态命令执行。
 
 ## 功能特性
 
-- 使用 macOS Accessibility API 直接读取微信消息（100% 准确）
+- **跨平台支持**：支持 macOS 和 Windows 10/11 平台
+- **原生消息读取**：
+  - macOS: 使用 Accessibility API 直接读取微信消息（100% 准确）
+  - Windows: 使用 UI Automation 直接读取控件（100% 准确）
 - 队列模式架构，消息检测与处理分离，防止漏掉回复
 - 智能消息去重机制，基于上下文的哈希算法（前2条消息）
 - 优化的消息处理策略，只处理最后3条消息，避免重复触发
@@ -20,10 +23,18 @@
 
 ## 系统要求
 
+### macOS
 - macOS 10.15+ (Catalina 或更高版本)
-- Python 3.9+
 - 微信 macOS 客户端
 - 辅助功能权限（用于模拟键盘操作）
+
+### Windows
+- Windows 10 / 11
+- 微信 Windows 客户端
+- 建议以管理员身份运行终端
+
+### 共同要求
+- Python 3.9+
 
 ## 安装
 
@@ -35,9 +46,16 @@ cd awsl-wechat-bot
 
 2. 创建虚拟环境并激活：
 
+**macOS:**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
+```
+
+**Windows:**
+```bash
+python -m venv venv
+.\venv\Scripts\activate
 ```
 
 3. 安装依赖：
@@ -109,9 +127,9 @@ class Config(BaseSettings):
 ### 1. 前置准备
 
 1. 启动微信并登录
-2. 授予终端辅助功能权限：
-   - 打开「系统设置」→「隐私与安全性」→「辅助功能」
-   - 添加并允许「终端」或你使用的终端应用
+2. 权限设置：
+   - **macOS**: 打开「系统设置」→「隐私与安全性」→「辅助功能」，添加并允许「终端」或你使用的终端应用。
+   - **Windows**: 建议以管理员身份运行 PowerShell 或 CMD，以确保有足够的权限操作微信窗口。
 
 ### 2. 运行机器人
 
@@ -123,7 +141,7 @@ python main.py
 
 机器人会自动：
 - 激活微信窗口
-- 切换到配置的群聊
+- 切换到配置的群聊（Windows 下会使用 Ctrl+F 搜索）
 - 点击输入框确保焦点
 - 开始监控消息（每3秒检测一次）
 - 检测到 "awsl+问题" 时使用 AI 回答
@@ -169,7 +187,11 @@ awsl-wechat-bot/
 ├── config.py                    # 配置文件（使用 Pydantic Settings）
 ├── ai_service.py                # AI 服务模块
 ├── command_service.py           # 动态命令服务模块
-├── utils_accessibility_api.py   # Accessibility API 工具
+├── adapters/                    # 平台适配器
+│   ├── base.py                  # 适配器基类
+│   ├── macos.py                 # macOS 实现 (Accessibility API)
+│   └── windows.py               # Windows 实现 (UI Automation)
+├── utils_accessibility_api.py   # Accessibility API 工具 (macOS)
 ├── utils_ocr.py                 # OCR 相关工具（备用）
 ├── utils_screenshot.py          # 截图工具（备用）
 ├── get_messages.applescript     # 获取消息的 AppleScript
@@ -187,7 +209,7 @@ awsl-wechat-bot/
 机器人使用**双线程队列模式**：
 
 1. **检测线程**：持续监控消息（每3秒一次）
-   - 使用 Accessibility API 读取微信聊天消息
+   - 调用对应平台的适配器读取微信聊天消息
    - 只检查最后3条消息，提高效率
    - 使用前向上下文（前2条消息）计算哈希值去重
    - 智能过滤：找到最后一个已处理的消息，只处理其后的新消息
@@ -223,16 +245,28 @@ awsl-wechat-bot/
 
 ### 消息获取
 
+**macOS:**
 - 使用 macOS Accessibility API 直接访问微信 UI 元素
 - 查找 AXList（title="Messages"）获取消息列表
 - 提取每条消息的 AXStaticText 内容
 - 准确度 100%，无需 OCR
 
+**Windows:**
+- 使用 Microsoft UI Automation (via `uiautomation` 库)
+- 查找 `ListControl`（Name="消息"）获取消息列表
+- 提取 `ListItemControl` 下的文本内容
+- 准确度 100%，无需 OCR
+
 ### 输入框焦点
 
+**macOS:**
 - 使用 Quartz 框架的系统级鼠标事件
 - 计算输入框位置（窗口宽度60%，高度92%）
 - 模拟真实鼠标点击获得焦点
+
+**Windows:**
+- 使用 UI Automation 激活窗口
+- 发送消息时使用 `Ctrl+F` 确保在群聊界面，使用 `Ctrl+V` 粘贴消息
 
 ### 智能响应
 
@@ -250,11 +284,11 @@ awsl-wechat-bot/
 
 ## 注意事项
 
-- 首次运行需要授予辅助功能权限
-- 运行时微信窗口需要保持可见
+- 首次运行需要授予相关权限（macOS 辅助功能 / Windows 管理员）
+- 运行时微信窗口需要保持可见（不能最小化到托盘）
 - 机器人运行期间会自动激活微信窗口
 - 建议在不使用电脑时运行，避免影响其他操作
-- **推荐使用 lume 虚拟机运行**，可实现隔离环境和 24/7 持续运行
+- **推荐使用虚拟机运行**，可实现隔离环境和 24/7 持续运行
 
 ## DEBUG 模式
 
