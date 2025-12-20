@@ -51,6 +51,16 @@ class Config(BaseSettings):
     OPENAI_MAX_TOKENS: int = 500
     OPENAI_TEMPERATURE: float = 0.7
 
+    # 定时任务配置
+    # 示例:
+    # [
+    #     {"type": "daily", "time": "09:00", "content": "早安！"},
+    #     {"type": "interval", "seconds": 3600, "command": "ss", "params": ""}
+    # ]
+    SCHEDULED_TASKS: list[dict] = [
+        {"type": "interval", "seconds": 3600, "command": "ss"}
+    ]
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

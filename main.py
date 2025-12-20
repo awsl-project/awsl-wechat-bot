@@ -7,6 +7,7 @@ AWSL 微信机器人 - 使用 Accessibility API
 import os
 import sys
 import time
+import datetime
 import logging
 import subprocess
 import tempfile
@@ -272,470 +273,1307 @@ class AWSlBot:
         # 数据库锁（保护数据库操作）
         self.db_lock = threading.Lock()
 
-        # 运行控制
-        self.running = False
-        self.detector_thread = None
-        self.processor_thread = None
+                # 运行控制
 
-        self._init_db()
+                self.running = False
 
-        # 初始化 AI 服务
-        try:
-            self.ai_service = AIService()
-        except Exception as e:
-            logger.warning(f"AI 服务初始化失败，AI 功能将不可用: {e}")
-            self.ai_service = None
+                self.detector_thread = None
 
-        # 初始化命令服务
-        try:
-            self.command_service = CommandService()
-            if self.command_service.load_commands():
-                logger.info(f"命令服务初始化成功，已加载 {len(self.command_service.commands)} 个命令")
-            else:
-                logger.warning("命令列表加载失败")
-        except Exception as e:
-            logger.warning(f"命令服务初始化失败: {e}")
-            self.command_service = None
+                self.processor_thread = None
 
-        logger.info(f"AWSL Bot 初始化完成，监控群聊: {group_name}")
+                self.scheduler_thread = None
 
-    def _init_db(self):
-        """初始化 SQLite 数据库"""
-        db_path = os.path.join(os.path.dirname(__file__), 'messages.db')
-        # 允许跨线程使用（因为我们使用队列模式）
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.execute('''
-            CREATE TABLE IF NOT EXISTS message_hashes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                hash TEXT UNIQUE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        self.conn.commit()
-        logger.info(f"数据库初始化完成: {db_path}")
+        
 
-    def _hash_message_with_context(self, messages: list, index: int) -> str:
-        """
-        结合前向上下文计算消息的唯一哈希值
+                self._init_db()
 
-        只使用前面的消息作为上下文，不使用后面的消息，
-        这样当新消息出现时，已有消息的哈希值不会改变
+        
 
-        Args:
-            messages: 完整消息列表
-            index: 当前消息的索引
+                # 初始化 AI 服务
 
-        Returns:
-            str: 包含前向上下文的哈希值
-        """
-        current = messages[index]
-
-        # 获取前面2条消息作为上下文（如果存在）
-        context_size = 2
-        context_parts = []
-
-        for i in range(max(0, index - context_size), index):
-            context_parts.append(messages[i])
-
-        context_parts.append(current)
-
-        # 组合上下文：前2条 + 当前
-        context = "|".join(context_parts)
-        return str(hash(context))
-
-    def _is_processed(self, msg_hash: str) -> bool:
-        """检查消息是否已处理"""
-        with self.db_lock:
-            cursor = self.conn.execute(
-                'SELECT 1 FROM message_hashes WHERE hash = ?', (msg_hash,)
-            )
-            return cursor.fetchone() is not None
-
-    def _mark_processed(self, msg_hash: str):
-        """标记消息为已处理"""
-        with self.db_lock:
-            try:
-                self.conn.execute(
-                    'INSERT OR IGNORE INTO message_hashes (hash) VALUES (?)', (msg_hash,)
-                )
-                self.conn.commit()
-            except sqlite3.Error as e:
-                logger.error(f"数据库写入失败: {e}")
-
-    def _cleanup_old_hashes(self):
-        """清理旧记录，保留最近的记录"""
-        with self.db_lock:
-            cursor = self.conn.execute('SELECT COUNT(*) FROM message_hashes')
-            count = cursor.fetchone()[0]
-            if count > self.max_cache:
-                self.conn.execute('''
-                    DELETE FROM message_hashes WHERE id IN (
-                        SELECT id FROM message_hashes ORDER BY id ASC LIMIT ?
-                    )
-                ''', (count - self.max_cache // 2,))
-                self.conn.commit()
-                logger.info(f"清理旧记录，剩余 {self.max_cache // 2} 条")
-
-    def fetch_awsl_image(self) -> str:
-        """从 API 获取随机图片 URL"""
-        try:
-            response = requests.get(
-                config.API_URL,
-                headers={'accept': 'application/json'},
-                timeout=10
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            pic_info = data.get('pic_info', {})
-            url = pic_info.get('large', pic_info.get('original', {})).get('url')
-            if url:
-                logger.info(f"获取到图片: {url[:50]}...")
-                return url
-            return None
-
-        except Exception as e:
-            logger.error(f"获取图片失败: {e}")
-            return None
-
-    def download_image(self, url: str) -> str:
-        """下载图片到临时文件"""
-        try:
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-
-            suffix = '.png' if 'png' in url.lower() else '.jpg'
-            fd, temp_path = tempfile.mkstemp(suffix=suffix)
-            with os.fdopen(fd, 'wb') as f:
-                f.write(response.content)
-
-            logger.info(f"图片已下载: {temp_path}")
-            return temp_path
-
-        except Exception as e:
-            logger.error(f"下载图片失败: {e}")
-            return None
-
-    def send_awsl_image(self) -> bool:
-        """获取并发送 AWSL 图片"""
-        image_url = self.fetch_awsl_image()
-        if not image_url:
-            return False
-
-        image_path = self.download_image(image_url)
-        if not image_path:
-            return False
-
-        try:
-            return self.wechat.send_image(image_path)
-        finally:
-            try:
-                os.remove(image_path)
-            except OSError:
-                pass
-
-    def is_trigger(self, text: str) -> tuple:
-        """
-        检查是否包含触发词
-
-        Returns:
-            tuple: (trigger_type, content)
-                trigger_type: "ai" - AI回复, "command" - 远程命令, "command_refresh" - 刷新命令列表, None - 不触发
-                content:
-                    - AI模式时为问题内容
-                    - command模式时为(command_key, params)元组
-                    - 其他为空字符串
-        """
-        # 过滤包含 Animated Stickers 的消息（不区分大小写）
-        if "animated stickers" in text.lower():
-            return (None, "")
-
-        # 消息内容
-        content = text.strip()
-        content_lower = content.lower()
-
-        # 检查是否为 awsl 触发词
-        keyword_lower = config.TRIGGER_KEYWORD.lower()
-
-        # 特殊处理：awsl hp - 刷新命令列表
-        if content_lower == f"{keyword_lower} hp":
-            logger.info("匹配到 awsl hp - 刷新命令列表")
-            return ("command_refresh", ("hp", ""))
-
-        # 如果以 awsl 开头
-        if content_lower.startswith(keyword_lower):
-            # 提取 awsl 后面的部分
-            after_keyword = content[len(config.TRIGGER_KEYWORD):].strip()
-
-            # 如果 awsl 后面有内容，作为 AI 问题
-            if after_keyword:
-                return ("ai", after_keyword)
-
-            # 纯 awsl，不触发任何动作
-            return (None, "")
-
-        # 检查是否为远程命令（直接执行，不需要 awsl 前缀）
-        if self.command_service:
-            cmd_match = self.command_service.match_command(content)
-            if cmd_match:
-                logger.info(f"匹配到远程命令: {cmd_match[0]} with params: {cmd_match[1]}")
-                return ("command", cmd_match)
-
-        # 不触发
-        return (None, "")
-
-
-    def message_detector_loop(self):
-        """消息检测循环 - 持续检测新消息并加入队列"""
-        logger.info("消息检测线程启动")
-
-        # 初始化：记录当前所有消息避免重复触发
-        initial_messages = self.wechat.get_messages()
-        for i, msg in enumerate(initial_messages):
-            msg_hash = self._hash_message_with_context(initial_messages, i)
-            self._mark_processed(msg_hash)
-        logger.info(f"已记录历史消息: {len(initial_messages)} 条")
-
-        while self.running:
-            try:
-                messages = self.wechat.get_messages()
-
-                # Debug 模式：输出所有检测到的消息
-                if config.DEBUG:
-                    logger.info("-" * 40)
-                    logger.info(f"检测到 {len(messages)} 条消息（含重复）")
-                    if messages:
-                        logger.debug("所有消息:")
-                        for i, msg in enumerate(messages, 1):
-                            logger.debug(f"  [{i}] {msg}")
-
-                # 只处理最后3条消息，其他的忽略（不计算hash，不检查命令）
-                messages_to_check = messages[-3:] if len(messages) > 3 else messages
-
-                if config.DEBUG and len(messages) > 3:
-                    logger.debug(f"总消息 {len(messages)} 条，仅处理最后 3 条")
-
-                # 第一阶段：预检查所有3条消息的hash状态
-                start_index = len(messages) - len(messages_to_check)
-                message_status = []  # [(index, msg, hash, is_processed), ...]
-
-                for i, msg in enumerate(messages_to_check):
-                    original_index = start_index + i
-                    msg_hash = self._hash_message_with_context(messages, original_index)
-                    is_processed = self._is_processed(msg_hash)
-                    message_status.append((original_index, msg, msg_hash, is_processed))
-
-                    if config.DEBUG:
-                        # 获取前向上下文预览
-                        context_preview = []
-                        for j in range(max(0, original_index - 2), original_index):
-                            context_preview.append(messages[j][:15])
-                        context_str = " → ".join(context_preview) if context_preview else "无"
-                        logger.debug(f"  [{original_index}] 消息: {msg[:30]}... | 前向上下文: [{context_str}] | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
-
-                # 第二阶段：从后往前找到最后一个已处理的消息
-                # 只处理这个位置之后的所有消息
-                last_processed_idx = None
-                for idx in range(len(message_status) - 1, -1, -1):
-                    if message_status[idx][3]:  # is_processed
-                        last_processed_idx = idx
-                        break
-
-                if last_processed_idx is None:
-                    # 没有已处理的消息，处理所有消息
-                    messages_to_trigger = message_status
-                    if config.DEBUG:
-                        logger.debug("没有已处理的消息，处理所有3条")
-                elif last_processed_idx == len(message_status) - 1:
-                    # 最后一条是已处理的，后面没有消息了
-                    if config.DEBUG:
-                        logger.debug("最后一条消息已处理，无新消息需要处理")
-                    messages_to_trigger = []
-                else:
-                    # 处理最后一个已处理消息之后的所有消息
-                    messages_to_trigger = message_status[last_processed_idx + 1:]
-                    if config.DEBUG:
-                        skipped = last_processed_idx + 1
-                        logger.debug(f"跳过前 {skipped} 条消息（最后已处理位置: {message_status[last_processed_idx][0]}），从索引 {message_status[last_processed_idx + 1][0]} 开始处理")
-
-                if messages_to_trigger:
-                    new_messages = []
-                    for original_index, msg, msg_hash, is_processed in messages_to_trigger:
-                        if not is_processed:
-                            new_messages.append(msg)
-                            self._mark_processed(msg_hash)
-
-                    # 处理新消息的命令触发
-                    if new_messages:
-                        logger.info("-" * 40)
-                        logger.info(f"发现 {len(new_messages)} 条新消息")
-                        for msg in new_messages:
-                            logger.info(f"新消息: {msg}")
-
-                            trigger_type, content = self.is_trigger(msg)
-
-                            if trigger_type:
-                                # 将触发消息加入队列
-                                try:
-                                    self.message_queue.put_nowait({
-                                        'type': trigger_type,
-                                        'content': content,
-                                        'timestamp': time.time()
-                                    })
-                                    logger.info(f"✓ 消息已加入队列 (队列大小: {self.message_queue.qsize()})")
-                                except queue.Full:
-                                    logger.warning("⚠ 队列已满，丢弃消息")
-
-                # 清理旧记录
-                self._cleanup_old_hashes()
-
-                # 使用配置的检查间隔
-                time.sleep(config.CHECK_INTERVAL)
-
-            except subprocess.TimeoutExpired:
-                logger.error("⚠️ AppleScript 超时，跳过本次检测，将在下次重试")
-                time.sleep(2)  # 超时后等待更长时间再重试
-            except Exception as e:
-                logger.error(f"消息检测出错: {e}")
-                import traceback
-                if config.DEBUG:
-                    traceback.print_exc()
-                time.sleep(1)  # 出错时等待更长时间
-
-        logger.info("消息检测线程退出")
-
-    def message_processor_loop(self):
-        """消息处理循环 - 从队列取消息并处理（带冷却）"""
-        logger.info("消息处理线程启动")
-
-        while self.running:
-            try:
-                # 从队列获取消息（最多等待1秒）
                 try:
-                    task = self.message_queue.get(timeout=1)
-                except queue.Empty:
-                    continue
 
-                trigger_type = task['type']
-                content = task['content']
+                    self.ai_service = AIService()
 
-                # 检查冷却时间
-                with self.cooldown_lock:
-                    now = time.time()
-                    remaining = config.TRIGGER_COOLDOWN - (now - self.last_trigger_time)
+                except Exception as e:
 
-                    if remaining > 0:
-                        logger.info(f"⏳ 冷却中，还需 {remaining:.1f} 秒，消息将稍后处理")
-                        # 等待冷却时间
-                        time.sleep(remaining)
+                    logger.warning(f"AI 服务初始化失败，AI 功能将不可用: {e}")
+
+                    self.ai_service = None
+
+        
+
+                # 初始化命令服务
+
+                try:
+
+                    self.command_service = CommandService()
+
+                    if self.command_service.load_commands():
+
+                        logger.info(f"命令服务初始化成功，已加载 {len(self.command_service.commands)} 个命令")
+
+                    else:
+
+                        logger.warning("命令列表加载失败")
+
+                except Exception as e:
+
+                    logger.warning(f"命令服务初始化失败: {e}")
+
+                    self.command_service = None
+
+        
+
+                logger.info(f"AWSL Bot 初始化完成，监控群聊: {group_name}")
+
+        
+
+            def _init_db(self):
+
+                """初始化 SQLite 数据库"""
+
+                db_path = os.path.join(os.path.dirname(__file__), 'messages.db')
+
+                # 允许跨线程使用（因为我们使用队列模式）
+
+                self.conn = sqlite3.connect(db_path, check_same_thread=False)
+
+                self.conn.execute('''
+
+                    CREATE TABLE IF NOT EXISTS message_hashes (
+
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                        hash TEXT UNIQUE NOT NULL,
+
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+                    )
+
+                ''')
+
+                self.conn.commit()
+
+                logger.info(f"数据库初始化完成: {db_path}")
+
+        
+
+            def _hash_message_with_context(self, messages: list, index: int) -> str:
+
+                """
+
+                结合前向上下文计算消息的唯一哈希值
+
+        
+
+                只使用前面的消息作为上下文，不使用后面的消息，
+
+                这样当新消息出现时，已有消息的哈希值不会改变
+
+        
+
+                Args:
+
+                    messages: 完整消息列表
+
+                    index: 当前消息的索引
+
+        
+
+                Returns:
+
+                    str: 包含前向上下文的哈希值
+
+                """
+
+                current = messages[index]
+
+        
+
+                # 获取前面2条消息作为上下文（如果存在）
+
+                context_size = 2
+
+                context_parts = []
+
+        
+
+                for i in range(max(0, index - context_size), index):
+
+                    context_parts.append(messages[i])
+
+        
+
+                context_parts.append(current)
+
+        
+
+                # 组合上下文：前2条 + 当前
+
+                context = "|".join(context_parts)
+
+                return str(hash(context))
+
+        
+
+            def _is_processed(self, msg_hash: str) -> bool:
+
+                """检查消息是否已处理"""
+
+                with self.db_lock:
+
+                    cursor = self.conn.execute(
+
+                        'SELECT 1 FROM message_hashes WHERE hash = ?', (msg_hash,)
+
+                    )
+
+                    return cursor.fetchone() is not None
+
+        
+
+            def _mark_processed(self, msg_hash: str):
+
+                """标记消息为已处理"""
+
+                with self.db_lock:
+
+                    try:
+
+                        self.conn.execute(
+
+                            'INSERT OR IGNORE INTO message_hashes (hash) VALUES (?)', (msg_hash,)
+
+                        )
+
+                        self.conn.commit()
+
+                    except sqlite3.Error as e:
+
+                        logger.error(f"数据库写入失败: {e}")
+
+        
+
+            def _cleanup_old_hashes(self):
+
+                """清理旧记录，保留最近的记录"""
+
+                with self.db_lock:
+
+                    cursor = self.conn.execute('SELECT COUNT(*) FROM message_hashes')
+
+                    count = cursor.fetchone()[0]
+
+                    if count > self.max_cache:
+
+                        self.conn.execute('''
+
+                            DELETE FROM message_hashes WHERE id IN (
+
+                                SELECT id FROM message_hashes ORDER BY id ASC LIMIT ?
+
+                            )
+
+                        ''', (count - self.max_cache // 2,))
+
+                        self.conn.commit()
+
+                        logger.info(f"清理旧记录，剩余 {self.max_cache // 2} 条")
+
+        
+
+            def fetch_awsl_image(self) -> str:
+
+                """从 API 获取随机图片 URL"""
+
+                try:
+
+                    response = requests.get(
+
+                        config.API_URL,
+
+                        headers={'accept': 'application/json'},
+
+                        timeout=10
+
+                    )
+
+                    response.raise_for_status()
+
+                    data = response.json()
+
+        
+
+                    pic_info = data.get('pic_info', {})
+
+                    url = pic_info.get('large', pic_info.get('original', {})).get('url')
+
+                    if url:
+
+                        logger.info(f"获取到图片: {url[:50]}...")
+
+                        return url
+
+                    return None
+
+        
+
+                except Exception as e:
+
+                    logger.error(f"获取图片失败: {e}")
+
+                    return None
+
+        
+
+            def download_image(self, url: str) -> str:
+
+                """下载图片到临时文件"""
+
+                try:
+
+                    response = requests.get(url, timeout=30)
+
+                    response.raise_for_status()
+
+        
+
+                    suffix = '.png' if 'png' in url.lower() else '.jpg'
+
+                    fd, temp_path = tempfile.mkstemp(suffix=suffix)
+
+                    with os.fdopen(fd, 'wb') as f:
+
+                        f.write(response.content)
+
+        
+
+                    logger.info(f"图片已下载: {temp_path}")
+
+                    return temp_path
+
+        
+
+                except Exception as e:
+
+                    logger.error(f"下载图片失败: {e}")
+
+                    return None
+
+        
+
+            def send_awsl_image(self) -> bool:
+
+                """获取并发送 AWSL 图片"""
+
+                image_url = self.fetch_awsl_image()
+
+                if not image_url:
+
+                    return False
+
+        
+
+                image_path = self.download_image(image_url)
+
+                if not image_path:
+
+                    return False
+
+        
+
+                try:
+
+                    return self.wechat.send_image(image_path)
+
+                finally:
+
+                    try:
+
+                        os.remove(image_path)
+
+                    except OSError:
+
+                        pass
+
+        
+
+            def is_trigger(self, text: str) -> tuple:
+
+                """
+
+                检查是否包含触发词
+
+        
+
+                Returns:
+
+                    tuple: (trigger_type, content)
+
+                        trigger_type: "ai" - AI回复, "command" - 远程命令, "command_refresh" - 刷新命令列表, None - 不触发
+
+                        content:
+
+                            - AI模式时为问题内容
+
+                            - command模式时为(command_key, params)元组
+
+                            - 其他为空字符串
+
+                """
+
+                # 过滤包含 Animated Stickers 的消息（不区分大小写）
+
+                if "animated stickers" in text.lower():
+
+                    return (None, "")
+
+        
+
+                # 消息内容
+
+                content = text.strip()
+
+                content_lower = content.lower()
+
+        
+
+                # 检查是否为 awsl 触发词
+
+                keyword_lower = config.TRIGGER_KEYWORD.lower()
+
+        
+
+                # 特殊处理：awsl hp - 刷新命令列表
+
+                if content_lower == f"{keyword_lower} hp":
+
+                    logger.info("匹配到 awsl hp - 刷新命令列表")
+
+                    return ("command_refresh", ("hp", ""))
+
+        
+
+                # 如果以 awsl 开头
+
+                if content_lower.startswith(keyword_lower):
+
+                    # 提取 awsl 后面的部分
+
+                    after_keyword = content[len(config.TRIGGER_KEYWORD):].strip()
+
+        
+
+                    # 如果 awsl 后面有内容，作为 AI 问题
+
+                    if after_keyword:
+
+                        return ("ai", after_keyword)
+
+        
+
+                    # 纯 awsl，不触发任何动作
+
+                    return (None, "")
+
+        
+
+                # 检查是否为远程命令（直接执行，不需要 awsl 前缀）
+
+                if self.command_service:
+
+                    cmd_match = self.command_service.match_command(content)
+
+                    if cmd_match:
+
+                        logger.info(f"匹配到远程命令: {cmd_match[0]} with params: {cmd_match[1]}")
+
+                        return ("command", cmd_match)
+
+        
+
+                # 不触发
+
+                return (None, "")
+
+        
+
+            def scheduler_loop(self):
+
+                """定时任务调度循环"""
+
+                logger.info("定时任务调度线程启动")
+
+                
+
+                tasks = config.SCHEDULED_TASKS
+
+                if not tasks:
+
+                    logger.info("没有配置定时任务")
+
+                    # 即使没有任务也保持线程运行，防止退出异常，但休眠时间长一点
+
+                    while self.running:
+
+                        time.sleep(60)
+
+                    return
+
+        
+
+                logger.info(f"加载了 {len(tasks)} 个定时任务")
+
+                
+
+                # 初始化任务状态
+
+                # interval: 存储上次运行的时间戳 (timestamp)
+
+                # daily: 存储上次运行的日期 (YYYY-MM-DD)
+
+                task_states = {} 
+
+                
+
+                for i, task in enumerate(tasks):
+
+                    task_type = task.get('type')
+
+                    if task_type == 'interval':
+
+                        # 间隔任务初始化为当前时间，这样启动时不会立即发送，而是等待一个周期
+
+                        # 如果希望启动立即发送，可以设为 0
+
+                        task_states[i] = time.time()
+
+                        logger.info(f"任务[{i}] (interval): 每 {task.get('seconds')} 秒发送 '{task.get('content')}'")
+
+                    elif task_type == 'daily':
+
+                        # 日常任务初始化为空，表示今天还没发
+
+                        task_states[i] = ""
+
+                        logger.info(f"任务[{i}] (daily): 每天 {task.get('time')} 发送 '{task.get('content')}'")
+
+        
+
+                while self.running:
+
+                    try:
+
                         now = time.time()
 
-                    # 处理消息
-                    if trigger_type == "command" and self.command_service:
-                        # 执行命令
-                        command_key, params = content
-                        logger.info(f">>> 触发命令: {command_key} with params: {params}")
-                        result = self.command_service.execute_command(command_key, params)
+                        current_dt = datetime.datetime.now()
 
-                        if result:
-                            # 直接发送文本结果
-                            self.wechat.send_text(result)
+                        current_time_str = current_dt.strftime("%H:%M")
+
+                        current_date_str = current_dt.strftime("%Y-%m-%d")
+
+        
+
+                                        for i, task in enumerate(tasks):
+
+        
+
+                                            task_type = task.get('type')
+
+        
+
+                                            content = task.get('content')
+
+        
+
+                                            command_name = task.get('command')
+
+        
+
+                                            
+
+        
+
+                                            if not content and not command_name:
+
+        
+
+                                                continue
+
+        
+
+                        
+
+        
+
+                                            if task_type == 'interval':
+
+        
+
+                                                seconds = task.get('seconds', 3600)
+
+        
+
+                                                last_run = task_states.get(i, 0)
+
+        
+
+                                                
+
+        
+
+                                                if now - last_run >= seconds:
+
+        
+
+                                                    # 触发任务
+
+        
+
+                                                    try:
+
+        
+
+                                                        if command_name:
+
+        
+
+                                                            logger.info(f"⏰ 触发定时命令[{i}]: {command_name}")
+
+        
+
+                                                            self.message_queue.put_nowait({
+
+        
+
+                                                                'type': 'command',
+
+        
+
+                                                                'content': (command_name, task.get('params', '')),
+
+        
+
+                                                                'timestamp': now
+
+        
+
+                                                            })
+
+        
+
+                                                        else:
+
+        
+
+                                                            logger.info(f"⏰ 触发定时消息[{i}]: {content}")
+
+        
+
+                                                            self.message_queue.put_nowait({
+
+        
+
+                                                                'type': 'text',
+
+        
+
+                                                                'content': content,
+
+        
+
+                                                                'timestamp': now
+
+        
+
+                                                            })
+
+        
+
+                                                        task_states[i] = now
+
+        
+
+                                                    except queue.Full:
+
+        
+
+                                                        logger.warning("⚠ 队列已满，跳过定时任务")
+
+        
+
+                        
+
+        
+
+                                            elif task_type == 'daily':
+
+        
+
+                                                target_time = task.get('time')
+
+        
+
+                                                last_run_date = task_states.get(i, "")
+
+        
+
+                                                
+
+        
+
+                                                # 如果时间匹配 且 今天还没运行过
+
+        
+
+                                                if current_time_str == target_time and last_run_date != current_date_str:
+
+        
+
+                                                    try:
+
+        
+
+                                                        if command_name:
+
+        
+
+                                                            logger.info(f"⏰ 触发每日命令[{i}]: {command_name}")
+
+        
+
+                                                            self.message_queue.put_nowait({
+
+        
+
+                                                                'type': 'command',
+
+        
+
+                                                                'content': (command_name, task.get('params', '')),
+
+        
+
+                                                                'timestamp': now
+
+        
+
+                                                            })
+
+        
+
+                                                        else:
+
+        
+
+                                                            logger.info(f"⏰ 触发每日任务[{i}]: {content}")
+
+        
+
+                                                            self.message_queue.put_nowait({
+
+        
+
+                                                                'type': 'text',
+
+        
+
+                                                                'content': content,
+
+        
+
+                                                                'timestamp': now
+
+        
+
+                                                            })
+
+        
+
+                                                        # 标记今天已运行
+
+        
+
+                                                        task_states[i] = current_date_str
+
+        
+
+                                                    except queue.Full:
+
+        
+
+                                                        logger.warning("⚠ 队列已满，跳过定时任务")
+
+        
+
+                        # 每秒检查一次
+
+                        time.sleep(1)
+
+        
+
+                    except Exception as e:
+
+                        logger.error(f"调度线程出错: {e}")
+
+                        time.sleep(5)
+
+        
+
+                logger.info("定时任务调度线程退出")
+
+        
+
+            def message_detector_loop(self):
+
+                """消息检测循环 - 持续检测新消息并加入队列"""
+
+                logger.info("消息检测线程启动")
+
+        
+
+                # 初始化：记录当前所有消息避免重复触发
+
+                initial_messages = self.wechat.get_messages()
+
+                for i, msg in enumerate(initial_messages):
+
+                    msg_hash = self._hash_message_with_context(initial_messages, i)
+
+                    self._mark_processed(msg_hash)
+
+                logger.info(f"已记录历史消息: {len(initial_messages)} 条")
+
+        
+
+                while self.running:
+
+                    try:
+
+                        messages = self.wechat.get_messages()
+
+        
+
+                        # Debug 模式：输出所有检测到的消息
+
+                        if config.DEBUG:
+
+                            logger.info("-" * 40)
+
+                            logger.info(f"检测到 {len(messages)} 条消息（含重复）")
+
+                            if messages:
+
+                                logger.debug("所有消息:")
+
+                                for i, msg in enumerate(messages, 1):
+
+                                    logger.debug(f"  [{i}] {msg}")
+
+        
+
+                        # 只处理最后3条消息，其他的忽略（不计算hash，不检查命令）
+
+                        messages_to_check = messages[-3:] if len(messages) > 3 else messages
+
+        
+
+                        if config.DEBUG and len(messages) > 3:
+
+                            logger.debug(f"总消息 {len(messages)} 条，仅处理最后 3 条")
+
+        
+
+                        # 第一阶段：预检查所有3条消息的hash状态
+
+                        start_index = len(messages) - len(messages_to_check)
+
+                        message_status = []  # [(index, msg, hash, is_processed), ...]
+
+        
+
+                        for i, msg in enumerate(messages_to_check):
+
+                            original_index = start_index + i
+
+                            msg_hash = self._hash_message_with_context(messages, original_index)
+
+                            is_processed = self._is_processed(msg_hash)
+
+                            message_status.append((original_index, msg, msg_hash, is_processed))
+
+        
+
+                            if config.DEBUG:
+
+                                # 获取前向上下文预览
+
+                                context_preview = []
+
+                                for j in range(max(0, original_index - 2), original_index):
+
+                                    context_preview.append(messages[j][:15])
+
+                                context_str = " → ".join(context_preview) if context_preview else "无"
+
+                                logger.debug(f"  [{original_index}] 消息: {msg[:30]}... | 前向上下文: [{context_str}] | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
+
+        
+
+                        # 第二阶段：从后往前找到最后一个已处理的消息
+
+                        # 只处理这个位置之后的所有消息
+
+                        last_processed_idx = None
+
+                        for idx in range(len(message_status) - 1, -1, -1):
+
+                            if message_status[idx][3]:  # is_processed
+
+                                last_processed_idx = idx
+
+                                break
+
+        
+
+                        if last_processed_idx is None:
+
+                            # 没有已处理的消息，处理所有消息
+
+                            messages_to_trigger = message_status
+
+                            if config.DEBUG:
+
+                                logger.debug("没有已处理的消息，处理所有3条")
+
+                        elif last_processed_idx == len(message_status) - 1:
+
+                            # 最后一条是已处理的，后面没有消息了
+
+                            if config.DEBUG:
+
+                                logger.debug("最后一条消息已处理，无新消息需要处理")
+
+                            messages_to_trigger = []
+
                         else:
-                            logger.error(f"命令执行失败: {command_key}")
-                            self.wechat.send_text(f"命令执行失败: {command_key}")
 
-                    elif trigger_type == "command_refresh" and self.command_service:
-                        logger.info(">>> 触发命令刷新")
-                        # 刷新命令列表
-                        success = self.command_service.load_commands()
-                        if success:
-                            self.wechat.send_text("已经成功了")
+                            # 处理最后一个已处理消息之后的所有消息
 
-                    elif trigger_type == "ai" and self.ai_service:
-                        logger.info(f">>> 触发 AI 回复! 问题: {content}")
-                        answer = self.ai_service.ask(content)
-                        if answer:
-                            self.wechat.send_text(answer)
-                        else:
-                            logger.error("AI 回复失败")
-                            self.wechat.send_text("抱歉，我现在无法回答这个问题 😅")
-                    elif trigger_type == "ai" and not self.ai_service:
-                        logger.warning("AI 服务未初始化，无法回复")
+                            messages_to_trigger = message_status[last_processed_idx + 1:]
 
-                    # 更新最后触发时间
-                    self.last_trigger_time = now
+                            if config.DEBUG:
 
-                # 标记任务完成
-                self.message_queue.task_done()
+                                skipped = last_processed_idx + 1
 
-            except Exception as e:
-                logger.error(f"消息处理出错: {e}")
-                import traceback
-                traceback.print_exc()
+                                logger.debug(f"跳过前 {skipped} 条消息（最后已处理位置: {message_status[last_processed_idx][0]}），从索引 {message_status[last_processed_idx + 1][0]} 开始处理")
 
-        logger.info("消息处理线程退出")
+        
 
-    def run(self):
-        """运行机器人主循环"""
-        logger.info("=" * 50)
-        logger.info("AWSL Bot 启动 (Accessibility API + 队列模式)")
-        logger.info(f"监控群聊: {self.group_name}")
-        logger.info(f"触发关键词: {config.TRIGGER_KEYWORD}")
-        logger.info(f"检测间隔: {config.CHECK_INTERVAL} 秒")
-        logger.info(f"响应冷却: {config.TRIGGER_COOLDOWN} 秒")
-        logger.info(f"队列大小: 最多 10 条")
-        logger.info(f"调试模式: {'开启' if config.DEBUG else '关闭'}")
-        logger.info("=" * 50)
+                        if messages_to_trigger:
 
-        # 切换到目标群聊
-        self.wechat.find_chat(self.group_name)
+                            new_messages = []
 
-        # 设置运行标志
-        self.running = True
+                            for original_index, msg, msg_hash, is_processed in messages_to_trigger:
 
-        # 启动检测线程
-        self.detector_thread = threading.Thread(
-            target=self.message_detector_loop,
-            name="MessageDetector",
-            daemon=True
-        )
-        self.detector_thread.start()
+                                if not is_processed:
 
-        # 启动处理线程
-        self.processor_thread = threading.Thread(
-            target=self.message_processor_loop,
-            name="MessageProcessor",
-            daemon=True
-        )
-        self.processor_thread.start()
+                                    new_messages.append(msg)
 
-        logger.info("两个线程已启动:")
-        logger.info("  - 检测线程: 持续检测新消息")
-        logger.info("  - 处理线程: 处理消息并发送回复（带冷却）")
-        logger.info("")
-        logger.info("开始监控...")
+                                    self._mark_processed(msg_hash)
 
-        try:
-            # 主线程等待
-            while True:
-                time.sleep(1)
+        
 
-        except KeyboardInterrupt:
-            logger.info("")
-            logger.info("收到停止信号，正在关闭...")
-            self.running = False
+                            # 处理新消息的命令触发
 
-            # 等待线程结束
-            if self.detector_thread:
-                self.detector_thread.join(timeout=5)
-            if self.processor_thread:
-                self.processor_thread.join(timeout=5)
+                            if new_messages:
 
-            # 关闭数据库连接
-            with self.db_lock:
-                self.conn.close()
+                                logger.info("-" * 40)
 
-            logger.info("机器人已停止")
+                                logger.info(f"发现 {len(new_messages)} 条新消息")
+
+                                for msg in new_messages:
+
+                                    logger.info(f"新消息: {msg}")
+
+        
+
+                                    trigger_type, content = self.is_trigger(msg)
+
+        
+
+                                    if trigger_type:
+
+                                        # 将触发消息加入队列
+
+                                        try:
+
+                                            self.message_queue.put_nowait({
+
+                                                'type': trigger_type,
+
+                                                'content': content,
+
+                                                'timestamp': time.time()
+
+                                            })
+
+                                            logger.info(f"✓ 消息已加入队列 (队列大小: {self.message_queue.qsize()})")
+
+                                        except queue.Full:
+
+                                            logger.warning("⚠ 队列已满，丢弃消息")
+
+        
+
+                        # 清理旧记录
+
+                        self._cleanup_old_hashes()
+
+        
+
+                        # 使用配置的检查间隔
+
+                        time.sleep(config.CHECK_INTERVAL)
+
+        
+
+                    except subprocess.TimeoutExpired:
+
+                        logger.error("⚠️ AppleScript 超时，跳过本次检测，将在下次重试")
+
+                        time.sleep(2)  # 超时后等待更长时间再重试
+
+                    except Exception as e:
+
+                        logger.error(f"消息检测出错: {e}")
+
+                        import traceback
+
+                        if config.DEBUG:
+
+                            traceback.print_exc()
+
+                        time.sleep(1)  # 出错时等待更长时间
+
+        
+
+                logger.info("消息检测线程退出")
+
+        
+
+            def message_processor_loop(self):
+
+                """消息处理循环 - 从队列取消息并处理（带冷却）"""
+
+                logger.info("消息处理线程启动")
+
+        
+
+                while self.running:
+
+                    try:
+
+                        # 从队列获取消息（最多等待1秒）
+
+                        try:
+
+                            task = self.message_queue.get(timeout=1)
+
+                        except queue.Empty:
+
+                            continue
+
+        
+
+                        trigger_type = task['type']
+
+                        content = task['content']
+
+                        
+
+                        # 直接发送类型（定时任务），也受冷却影响，防止和AI回复冲突
+
+                        if trigger_type == "text":
+
+                            logger.info(f">>> 触发定时消息发送: {content}")
+
+                            with self.cooldown_lock:
+
+                                 # 注意：定时消息通常优先级较高，或者是用户设定的
+
+                                 # 这里我们还是加上冷却锁，避免正在打字的时候插入
+
+                                 # 如果不需要冷却（允许连发），可以把冷却判断改得宽松点
+
+                                 # 这里复用冷却逻辑是安全的，保证独占焦点
+
+                                 self.wechat.send_text(content)
+
+                                 self.last_trigger_time = time.time()
+
+                            self.message_queue.task_done()
+
+                            continue
+
+        
+
+                        # 检查冷却时间
+
+                        with self.cooldown_lock:
+
+                            now = time.time()
+
+                            remaining = config.TRIGGER_COOLDOWN - (now - self.last_trigger_time)
+
+        
+
+                            if remaining > 0:
+
+                                logger.info(f"⏳ 冷却中，还需 {remaining:.1f} 秒，消息将稍后处理")
+
+                                # 等待冷却时间
+
+                                time.sleep(remaining)
+
+                                now = time.time()
+
+        
+
+                            # 处理消息
+
+                            if trigger_type == "command" and self.command_service:
+
+                                # 执行命令
+
+                                command_key, params = content
+
+                                logger.info(f">>> 触发命令: {command_key} with params: {params}")
+
+                                result = self.command_service.execute_command(command_key, params)
+
+        
+
+                                if result:
+
+                                    # 直接发送文本结果
+
+                                    self.wechat.send_text(result)
+
+                                else:
+
+                                    logger.error(f"命令执行失败: {command_key}")
+
+                                    self.wechat.send_text(f"命令执行失败: {command_key}")
+
+        
+
+                            elif trigger_type == "command_refresh" and self.command_service:
+
+                                logger.info(">>> 触发命令刷新")
+
+                                # 刷新命令列表
+
+                                success = self.command_service.load_commands()
+
+                                if success:
+
+                                    self.wechat.send_text("已经成功了")
+
+        
+
+                            elif trigger_type == "ai" and self.ai_service:
+
+                                logger.info(f">>> 触发 AI 回复! 问题: {content}")
+
+                                answer = self.ai_service.ask(content)
+
+                                if answer:
+
+                                    self.wechat.send_text(answer)
+
+                                else:
+
+                                    logger.error("AI 回复失败")
+
+                                    self.wechat.send_text("抱歉，我现在无法回答这个问题 😅")
+
+                            elif trigger_type == "ai" and not self.ai_service:
+
+                                logger.warning("AI 服务未初始化，无法回复")
+
+        
+
+                            # 更新最后触发时间
+
+                            self.last_trigger_time = now
+
+        
+
+                        # 标记任务完成
+
+                        self.message_queue.task_done()
+
+        
+
+                    except Exception as e:
+
+                        logger.error(f"消息处理出错: {e}")
+
+                        import traceback
+
+                        traceback.print_exc()
+
+        
+
+                logger.info("消息处理线程退出")
+
+        
+
+            def run(self):
+
+                """运行机器人主循环"""
+
+                logger.info("=" * 50)
+
+                logger.info("AWSL Bot 启动 (Accessibility API + 队列模式)")
+
+                logger.info(f"监控群聊: {self.group_name}")
+
+                logger.info(f"触发关键词: {config.TRIGGER_KEYWORD}")
+
+                logger.info(f"检测间隔: {config.CHECK_INTERVAL} 秒")
+
+                logger.info(f"响应冷却: {config.TRIGGER_COOLDOWN} 秒")
+
+                logger.info(f"队列大小: 最多 10 条")
+
+                logger.info(f"调试模式: {'开启' if config.DEBUG else '关闭'}")
+
+                logger.info("=" * 50)
+
+        
+
+                # 切换到目标群聊
+
+                self.wechat.find_chat(self.group_name)
+
+        
+
+                # 设置运行标志
+
+                self.running = True
+
+        
+
+                # 启动检测线程
+
+                self.detector_thread = threading.Thread(
+
+                    target=self.message_detector_loop,
+
+                    name="MessageDetector",
+
+                    daemon=True
+
+                )
+
+                self.detector_thread.start()
+
+        
+
+                # 启动处理线程
+
+                self.processor_thread = threading.Thread(
+
+                    target=self.message_processor_loop,
+
+                    name="MessageProcessor",
+
+                    daemon=True
+
+                )
+
+                self.processor_thread.start()
+
+                
+
+                # 启动定时任务调度线程
+
+                self.scheduler_thread = threading.Thread(
+
+                    target=self.scheduler_loop,
+
+                    name="TaskScheduler",
+
+                    daemon=True
+
+                )
+
+                self.scheduler_thread.start()
+
+        
+
+                logger.info("三个线程已启动:")
+
+                logger.info("  - 检测线程: 持续检测新消息")
+
+                logger.info("  - 处理线程: 处理消息并发送回复（带冷却）")
+
+                logger.info("  - 调度线程: 监控并触发定时任务")
+
+                logger.info("")
+
+                logger.info("开始监控...")
+
+        
+
+                try:
+
+                    # 主线程等待
+
+                    while True:
+
+                        time.sleep(1)
+
+        
+
+                except KeyboardInterrupt:
+
+                    logger.info("")
+
+                    logger.info("收到停止信号，正在关闭...")
+
+                    self.running = False
+
+        
+
+                    # 等待线程结束
+
+                    if self.detector_thread:
+
+                        self.detector_thread.join(timeout=5)
+
+                    if self.processor_thread:
+
+                        self.processor_thread.join(timeout=5)
+
+                    if self.scheduler_thread:
+
+                        self.scheduler_thread.join(timeout=5)
+
+        
+
+                    # 关闭数据库连接
+
+                    with self.db_lock:
+
+                        self.conn.close()
+
+        
+
+                    logger.info("机器人已停止")
 
 
 def main():
