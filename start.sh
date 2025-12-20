@@ -21,13 +21,14 @@ LOG_FILE="bot.log"
 MAX_LINES=1000
 CHECK_INTERVAL=3600  # 每小时检查一次（秒）
 
-# 清理函数
+# 清理函数（保持 inode 不变，让 tail -f 继续工作）
 cleanup_log() {
     if [ -f "$LOG_FILE" ]; then
         LINE_COUNT=$(wc -l < "$LOG_FILE")
         if [ "$LINE_COUNT" -gt "$MAX_LINES" ]; then
             tail -n "$MAX_LINES" "$LOG_FILE" > "$LOG_FILE.tmp"
-            mv "$LOG_FILE.tmp" "$LOG_FILE"
+            cat "$LOG_FILE.tmp" > "$LOG_FILE"
+            rm -f "$LOG_FILE.tmp"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] 日志已清理，保留 $MAX_LINES 行（原 $LINE_COUNT 行）"
         fi
     fi
@@ -52,7 +53,8 @@ if [ -f "$LOG_FILE" ]; then
     if [ "$LINE_COUNT" -gt "$MAX_LINES" ]; then
         echo "日志文件有 $LINE_COUNT 行，清理中..."
         tail -n "$MAX_LINES" "$LOG_FILE" > "$LOG_FILE.tmp"
-        mv "$LOG_FILE.tmp" "$LOG_FILE"
+        cat "$LOG_FILE.tmp" > "$LOG_FILE"
+        rm -f "$LOG_FILE.tmp"
         echo "日志已清理，保留最近 $MAX_LINES 行"
     else
         echo "日志文件有 $LINE_COUNT 行，无需清理"
