@@ -359,15 +359,24 @@ class ScheduledTaskService:
             # 获取上次应该运行的时间
             prev_run = cron.get_prev(datetime)
 
-            # 如果从未运行过，或者上次应该运行的时间在最后运行时间之后
+            # 获取下次应该运行的时间
+            next_run = cron.get_next(datetime)
+
+            # 计算当前时间距离上次应该执行的时间差（秒）
+            time_since_prev = (current_time - prev_run).total_seconds()
+
+            # 如果距离上次执行时间在60秒内，认为当前在执行窗口内
+            in_execution_window = 0 <= time_since_prev <= 60
+
+            # 如果从未运行过，只有在执行窗口内才运行
             if task.last_run is None:
-                return True
+                return in_execution_window
 
             # 解析最后运行时间
             last_run_dt = datetime.fromisoformat(task.last_run.replace('Z', '+00:00'))
 
-            # 如果上次应该运行的时间在最后运行时间之后，说明需要运行
-            return prev_run > last_run_dt
+            # 如果上次应该运行的时间在最后运行时间之后，且当前在执行窗口内，说明需要运行
+            return prev_run > last_run_dt and in_execution_window
         except Exception as e:
             logger.error(f"检查任务 {task.id} 运行时间失败: {e}")
             return False

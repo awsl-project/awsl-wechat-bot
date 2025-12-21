@@ -728,7 +728,9 @@
                     body: JSON.stringify(payload)
                 });
 
+                console.log('Response status:', response.status, response.ok);
                 const result = await response.json();
+                console.log('Response body:', result);
 
                 if (response.ok) {
                     showMessage('sendResultMessage', '✓ 消息发送成功！', 'success');
