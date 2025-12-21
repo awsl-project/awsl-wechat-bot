@@ -1100,10 +1100,18 @@
                 if (response.ok) {
                     showMessage('taskFormResultMessage', `✓ ${editingTaskId ? '任务已更新' : '任务已创建'}`, 'success');
                     hideTaskForm();
-                    loadTasks();
+
+                    // 刷新任务列表
+                    await loadTasks();
+
                     // 清空图片预览
                     taskImageBase64 = '';
                     document.getElementById('taskImagePreview').style.display = 'none';
+
+                    // 滚动到任务列表顶部，让用户看到新创建/更新的任务
+                    setTimeout(() => {
+                        document.getElementById('tasksList').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 100);
                 } else {
                     showMessage('taskFormResultMessage', `✗ ${result.detail || '操作失败'}`, 'error');
                 }
