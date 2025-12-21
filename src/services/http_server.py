@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 class SendMessageRequest(BaseModel):
     """发送消息请求模型"""
     group_name: str
-    message: str
+    message: Optional[str] = None
+    image_base64: Optional[str] = None
 
 
 class SendMessageResponse(BaseModel):
@@ -42,7 +43,9 @@ class ScheduledTaskCreate(BaseModel):
     """创建定时任务请求模型"""
     name: str
     cron_expression: str
-    message: str
+    message: Optional[str] = ""
+    message_type: str = "text"  # "text" or "image"
+    image_base64: Optional[str] = ""
     target_groups: List[str] = []
 
 
@@ -51,6 +54,8 @@ class ScheduledTaskUpdate(BaseModel):
     name: Optional[str] = None
     cron_expression: Optional[str] = None
     message: Optional[str] = None
+    message_type: Optional[str] = None
+    image_base64: Optional[str] = None
     target_groups: Optional[List[str]] = None
     enabled: Optional[bool] = None
 
@@ -61,6 +66,8 @@ class ScheduledTaskResponse(BaseModel):
     name: str
     cron_expression: str
     message: str
+    message_type: str
+    image_base64: str
     target_groups: List[str]
     enabled: bool
     created_at: Optional[str] = None
@@ -116,9 +123,13 @@ class HTTPServer:
         @self.app.get("/api/health")
         async def health():
             """健康检查"""
+            import time
             return {
                 "status": "healthy",
-                "groups_count": len(self.bot.groups)
+                "groups_count": len(self.bot.groups),
+                "server_time": datetime.now().isoformat(),
+                "timezone": time.strftime("%Z"),
+                "timezone_offset": time.strftime("%z")
             }
 
         @self.app.get("/api/groups", response_model=list[GroupInfo])
@@ -144,14 +155,21 @@ class HTTPServer:
         @self.app.post("/api/send", response_model=SendMessageResponse)
         async def send_message(request: SendMessageRequest):
             """
-            向指定聊天窗口发送消息
+            向指定聊天窗口发送消息或图片
 
             Args:
-                request: 包含 group_name 和 message 的请求体
+                request: 包含 group_name、message（可选）和 image_base64（可选）的请求体
 
             Returns:
                 发送结果
             """
+            # 验证请求参数
+            if not request.message and not request.image_base64:
+                raise HTTPException(
+                    status_code=400,
+                    detail="必须提供 message 或 image_base64 参数"
+                )
+
             # 查找目标群组
             target_group = None
             for group in self.bot.groups:
@@ -172,29 +190,45 @@ class HTTPServer:
                     detail=f"群组窗口已关闭: {request.group_name}"
                 )
 
-            # 发送消息
+            # 将消息或图片加入队列
             try:
-                success = self.bot.wechat.send_text_to_window(
-                    target_group["window"],
-                    request.message
-                )
+                import queue
 
-                if success:
-                    logger.info(f"[HTTP API] 成功发送消息到 [{request.group_name}]")
+                message_type = ""
+                task_data = {
+                    'group_name': request.group_name,
+                    'window': target_group["window"],
+                    'timestamp': time.time()
+                }
+
+                # 优先发送图片
+                if request.image_base64:
+                    task_data['type'] = 'image'
+                    task_data['content'] = request.image_base64
+                    message_type = "图片"
+                elif request.message:
+                    task_data['type'] = 'text'
+                    task_data['content'] = request.message
+                    message_type = "文本消息"
+
+                # 加入消息队列
+                try:
+                    self.bot.message_queue.put_nowait(task_data)
+                    logger.info(f"[HTTP API] {message_type}已加入队列，目标: [{request.group_name}]")
                     return SendMessageResponse(
                         success=True,
-                        message="消息发送成功"
+                        message=f"{message_type}已加入发送队列"
                     )
-                else:
+                except queue.Full:
                     raise HTTPException(
-                        status_code=500,
-                        detail="消息发送失败"
+                        status_code=503,
+                        detail="消息队列已满，请稍后重试"
                     )
             except Exception as e:
-                logger.error(f"[HTTP API] 发送消息失败: {e}")
+                logger.error(f"[HTTP API] 加入队列失败: {e}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"发送消息时出错: {str(e)}"
+                    detail=f"操作失败: {str(e)}"
                 )
 
         @self.app.get("/api/tasks", response_model=List[ScheduledTaskResponse])
@@ -212,7 +246,9 @@ class HTTPServer:
             task = self.task_service.create_task(
                 name=request.name,
                 cron_expression=request.cron_expression,
-                message=request.message,
+                message=request.message or "",
+                message_type=request.message_type,
+                image_base64=request.image_base64 or "",
                 target_groups=target_groups_json,
                 enabled=True
             )
@@ -257,6 +293,10 @@ class HTTPServer:
                 update_params['cron_expression'] = request.cron_expression
             if request.message is not None:
                 update_params['message'] = request.message
+            if request.message_type is not None:
+                update_params['message_type'] = request.message_type
+            if request.image_base64 is not None:
+                update_params['image_base64'] = request.image_base64
             if request.target_groups is not None:
                 update_params['target_groups'] = json.dumps(request.target_groups, ensure_ascii=False)
             if request.enabled is not None:
@@ -309,6 +349,8 @@ class HTTPServer:
             name=task.name,
             cron_expression=task.cron_expression,
             message=task.message,
+            message_type=task.message_type,
+            image_base64=task.image_base64 if task.message_type == "image" else "",
             target_groups=target_groups,
             enabled=task.enabled,
             created_at=task.created_at,
@@ -330,7 +372,8 @@ class HTTPServer:
                 for task in tasks:
                     # 检查任务是否应该运行
                     if self.task_service.should_run(task, current_time):
-                        logger.info(f"⏰ 执行定时任务: {task.name} - {task.message}")
+                        task_desc = f"{task.name} - {task.message_type}"
+                        logger.info(f"⏰ 执行定时任务: {task_desc}")
 
                         # 解析目标群组
                         try:
@@ -345,7 +388,7 @@ class HTTPServer:
                             # 只发送到指定的群
                             groups_to_send = [g for g in self.bot.groups if g["name"] in target_groups]
 
-                        # 发送消息到目标群组
+                        # 发送消息或图片到目标群组
                         for group in groups_to_send:
                             # 检查窗口是否存在
                             if not group["window"].Exists(0.5):
@@ -353,8 +396,14 @@ class HTTPServer:
                                 continue
 
                             try:
-                                self.bot.wechat.send_text_to_window(group["window"], task.message)
-                                logger.info(f"⏰ 定时任务消息已发送到 [{group['name']}]")
+                                if task.message_type == "image":
+                                    # 发送图片
+                                    self.bot.wechat.send_image_to_window(group["window"], task.image_base64)
+                                    logger.info(f"⏰ 定时任务图片已发送到 [{group['name']}]")
+                                else:
+                                    # 发送文本
+                                    self.bot.wechat.send_text_to_window(group["window"], task.message)
+                                    logger.info(f"⏰ 定时任务消息已发送到 [{group['name']}]")
                             except Exception as e:
                                 logger.error(f"⏰ 定时任务发送失败 [{group['name']}]: {e}")
 

@@ -22,6 +22,8 @@ class ScheduledTask:
         name: str = "",
         cron_expression: str = "",
         message: str = "",
+        message_type: str = "text",  # "text" or "image"
+        image_base64: str = "",  # base64 encoded image for message_type="image"
         target_groups: str = "",  # JSON string of group names, empty = all groups
         enabled: bool = True,
         created_at: Optional[str] = None,
@@ -32,6 +34,8 @@ class ScheduledTask:
         self.name = name
         self.cron_expression = cron_expression
         self.message = message
+        self.message_type = message_type
+        self.image_base64 = image_base64
         self.target_groups = target_groups
         self.enabled = enabled
         self.created_at = created_at
@@ -45,6 +49,8 @@ class ScheduledTask:
             "name": self.name,
             "cron_expression": self.cron_expression,
             "message": self.message,
+            "message_type": self.message_type,
+            "image_base64": self.image_base64,
             "target_groups": self.target_groups,
             "enabled": self.enabled,
             "created_at": self.created_at,
@@ -71,20 +77,47 @@ class ScheduledTaskService:
     def _init_db(self):
         """初始化数据库表"""
         with self.db_lock:
-            self.conn.execute('''
-                CREATE TABLE IF NOT EXISTS scheduled_tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    cron_expression TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    target_groups TEXT DEFAULT '',
-                    enabled INTEGER DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_run TIMESTAMP
-                )
-            ''')
-            self.conn.commit()
+            # 检查表是否存在
+            cursor = self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+            )
+            table_exists = cursor.fetchone() is not None
+
+            if table_exists:
+                # 检查是否需要添加新字段
+                cursor = self.conn.execute("PRAGMA table_info(scheduled_tasks)")
+                columns = [row[1] for row in cursor.fetchall()]
+
+                # 添加 message_type 字段
+                if 'message_type' not in columns:
+                    logger.info("添加 message_type 字段到数据库...")
+                    self.conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN message_type TEXT DEFAULT 'text'")
+
+                # 添加 image_base64 字段
+                if 'image_base64' not in columns:
+                    logger.info("添加 image_base64 字段到数据库...")
+                    self.conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN image_base64 TEXT DEFAULT ''")
+
+                self.conn.commit()
+            else:
+                # 创建新表
+                self.conn.execute('''
+                    CREATE TABLE scheduled_tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        cron_expression TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        message_type TEXT DEFAULT 'text',
+                        image_base64 TEXT DEFAULT '',
+                        target_groups TEXT DEFAULT '',
+                        enabled INTEGER DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_run TIMESTAMP
+                    )
+                ''')
+                self.conn.commit()
+
             logger.info("定时任务数据库初始化完成")
 
     def validate_cron_expression(self, cron_expr: str) -> bool:
@@ -108,7 +141,9 @@ class ScheduledTaskService:
         self,
         name: str,
         cron_expression: str,
-        message: str,
+        message: str = "",
+        message_type: str = "text",
+        image_base64: str = "",
         target_groups: str = "",
         enabled: bool = True
     ) -> Optional[ScheduledTask]:
@@ -118,7 +153,9 @@ class ScheduledTaskService:
         Args:
             name: 任务名称
             cron_expression: cron 表达式
-            message: 要发送的消息
+            message: 要发送的消息（message_type为text时）
+            message_type: 消息类型，"text" 或 "image"
+            image_base64: base64编码的图片（message_type为image时）
             target_groups: 目标群组（JSON字符串），空字符串表示所有群
             enabled: 是否启用
 
@@ -133,9 +170,9 @@ class ScheduledTaskService:
             try:
                 cursor = self.conn.execute(
                     '''INSERT INTO scheduled_tasks
-                       (name, cron_expression, message, target_groups, enabled)
-                       VALUES (?, ?, ?, ?, ?)''',
-                    (name, cron_expression, message, target_groups, 1 if enabled else 0)
+                       (name, cron_expression, message, message_type, image_base64, target_groups, enabled)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (name, cron_expression, message, message_type, image_base64, target_groups, 1 if enabled else 0)
                 )
                 self.conn.commit()
                 task_id = cursor.lastrowid
@@ -198,6 +235,8 @@ class ScheduledTaskService:
         name: Optional[str] = None,
         cron_expression: Optional[str] = None,
         message: Optional[str] = None,
+        message_type: Optional[str] = None,
+        image_base64: Optional[str] = None,
         target_groups: Optional[str] = None,
         enabled: Optional[bool] = None
     ) -> bool:
@@ -209,6 +248,8 @@ class ScheduledTaskService:
             name: 任务名称
             cron_expression: cron 表达式
             message: 消息内容
+            message_type: 消息类型
+            image_base64: 图片base64
             target_groups: 目标群组
             enabled: 是否启用
 
@@ -235,6 +276,12 @@ class ScheduledTaskService:
                 if message is not None:
                     updates.append("message = ?")
                     params.append(message)
+                if message_type is not None:
+                    updates.append("message_type = ?")
+                    params.append(message_type)
+                if image_base64 is not None:
+                    updates.append("image_base64 = ?")
+                    params.append(image_base64)
                 if target_groups is not None:
                     updates.append("target_groups = ?")
                     params.append(target_groups)
@@ -340,11 +387,13 @@ class ScheduledTaskService:
             name=row[1],
             cron_expression=row[2],
             message=row[3],
-            target_groups=row[4],
-            enabled=bool(row[5]),
-            created_at=row[6],
-            updated_at=row[7],
-            last_run=row[8]
+            message_type=row[4] if len(row) > 10 else "text",  # 新增字段，兼容旧数据
+            image_base64=row[5] if len(row) > 10 else "",  # 新增字段，兼容旧数据
+            target_groups=row[6] if len(row) > 10 else row[4],  # 兼容旧数据
+            enabled=bool(row[7] if len(row) > 10 else row[5]),  # 兼容旧数据
+            created_at=row[8] if len(row) > 10 else row[6],  # 兼容旧数据
+            updated_at=row[9] if len(row) > 10 else row[7],  # 兼容旧数据
+            last_run=row[10] if len(row) > 10 else row[8]  # 兼容旧数据
         )
 
     def close(self):

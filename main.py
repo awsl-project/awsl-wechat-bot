@@ -393,10 +393,18 @@ class AWSlBot:
                     self.message_queue.task_done()
                     continue
 
-                # 处理文本消息（定时任务）
+                # 处理文本消息（定时任务或 HTTP API）
                 if trigger_type == "text":
                     with self.cooldown_lock:
                         self.wechat.send_text_to_window(window, content)
+                        self.mark_triggered(group_name)
+                    self.message_queue.task_done()
+                    continue
+
+                # 处理图片消息（HTTP API 或定时任务）
+                if trigger_type == "image":
+                    with self.cooldown_lock:
+                        self.wechat.send_image_to_window(window, content)
                         self.mark_triggered(group_name)
                     self.message_queue.task_done()
                     continue

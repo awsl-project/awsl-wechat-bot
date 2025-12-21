@@ -250,6 +250,59 @@ class WindowsWeChatAdapter(BaseWeChatAdapter):
             logger.error(f"发送消息失败: {e}")
             return False
 
+    def send_image_to_window(self, window, image_base64: str) -> bool:
+        """向指定窗口发送图片（base64编码）
+
+        Args:
+            window: WindowControl 对象
+            image_base64: base64 编码的图片数据
+
+        Returns:
+            bool: 是否发送成功
+        """
+        import base64
+        from PIL import Image
+        import win32clipboard
+        import io
+
+        logger.debug(f"[send_image_to_window] 向窗口 {window.Name} 发送图片...")
+
+        # 激活窗口
+        self.activate_specific_window(window)
+
+        try:
+            # 解码 base64 数据
+            image_data = base64.b64decode(image_base64)
+
+            # 使用 PIL 读取图片
+            img = Image.open(io.BytesIO(image_data))
+
+            # 转换为 BMP 格式（Windows 剪贴板支持）
+            output = io.BytesIO()
+            img.convert("RGB").save(output, "BMP")
+            bmp_data = output.getvalue()[14:]  # 移除 BMP 文件头
+            output.close()
+
+            # 复制到剪贴板
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, bmp_data)
+            win32clipboard.CloseClipboard()
+
+            time.sleep(0.3)
+
+            # 粘贴图片
+            window.SendKeys('{CTRL}v', waitTime=0.5)
+
+            # 发送
+            window.SendKeys('{ENTER}', waitTime=0.2)
+
+            logger.info(f"✓ 图片发送成功到 [{window.Name}]")
+            return True
+        except Exception as e:
+            logger.error(f"发送图片失败: {e}")
+            return False
+
     def find_chat(self, chat_name: str) -> bool:
         """通过搜索进入聊天"""
         self.activate_window()
@@ -400,32 +453,36 @@ class WindowsWeChatAdapter(BaseWeChatAdapter):
 
     def send_image(self, image_path: str) -> bool:
         """发送图片 (通过复制文件到剪贴板)"""
-        # 这里需要依赖 PIL 和一些 Windows API 来把图片存入剪贴板
-        # 为了保持依赖精简，我们先实现一个基于文件路径复制的逻辑
-        import ctypes
-        from PIL import Image
-        import io
+        try:
+            from PIL import Image
+            import win32clipboard
+            import io
 
-        def send_to_clipboard(path):
-            img = Image.open(path)
+            # 读取图片并转换为 BMP 格式（Windows 剪贴板支持）
+            img = Image.open(image_path)
             output = io.BytesIO()
             img.convert("RGB").save(output, "BMP")
-            data = output.getvalue()[14:]
+            data = output.getvalue()[14:]  # 移除 BMP 文件头
             output.close()
 
-            ctypes.windll.user32.OpenClipboard(None)
-            ctypes.windll.user32.EmptyClipboard()
-            ctypes.windll.user32.SetClipboardData(8, ctypes.windll.kernel32.GlobalAlloc(0x42, len(data)))
-            # 简化的剪贴板操作，实际项目中可能需要更严谨的实现
-            ctypes.windll.user32.CloseClipboard()
+            # 复制到剪贴板
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+            win32clipboard.CloseClipboard()
 
-        try:
-            # 这是一个复杂的 Win32 操作，暂时使用简单模拟
-            # 实际最稳妥的方法是：选中文件 -> Ctrl+C -> 微信窗口 -> Ctrl+V
+            # 激活窗口并粘贴
             self.activate_window()
-            # 暂时提示：Windows 图片发送功能需要具体调试剪贴板格式
-            logger.warning("Windows 图片发送功能暂未通过底层 API 完全验证，建议优先使用文本")
-            return False
+            time.sleep(0.3)
+
+            # 粘贴图片
+            self.window.SendKeys('{CTRL}v', waitTime=0.5)
+
+            # 发送
+            self.window.SendKeys('{ENTER}', waitTime=0.2)
+
+            logger.info("✓ 图片发送成功")
+            return True
         except Exception as e:
             logger.error(f"发送图片失败: {e}")
             return False

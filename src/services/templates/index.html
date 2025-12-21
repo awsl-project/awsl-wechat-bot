@@ -460,12 +460,27 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="sendMessageType">消息类型</label>
+                        <select id="sendMessageType" onchange="toggleSendMessageType()">
+                            <option value="text">文本消息</option>
+                            <option value="image">图片消息</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="sendTextGroup">
                         <label for="messageText">消息内容</label>
                         <textarea
                             id="messageText"
                             placeholder="输入要发送的消息..."
-                            required
                         ></textarea>
+                    </div>
+
+                    <div class="form-group" id="sendImageGroup" style="display: none;">
+                        <label for="sendImageInput">选择图片</label>
+                        <input type="file" id="sendImageInput" accept="image/*" onchange="previewSendImage(event)">
+                        <div id="sendImagePreview" style="margin-top: 10px; display: none;">
+                            <img id="sendImagePreviewImg" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                        </div>
                     </div>
 
                     <button type="submit" class="btn" id="sendBtn">
@@ -510,6 +525,9 @@
                     <p style="margin-top: 10px; font-size: 12px; color: #92400e;">
                         格式: <code style="background: #fef3c7; padding: 2px 6px; border-radius: 4px;">分 时 日 月 星期</code>
                     </p>
+                    <p id="timezoneInfo" style="margin-top: 10px; font-size: 12px; color: #92400e; font-weight: 600;">
+                        ⏰ 时区: 加载中...
+                    </p>
                 </div>
 
                 <form id="taskForm">
@@ -536,8 +554,24 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="taskMessageType">消息类型</label>
+                        <select id="taskMessageType" onchange="toggleTaskMessageType()">
+                            <option value="text">文本消息</option>
+                            <option value="image">图片消息</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="taskTextGroup">
                         <label for="taskMessage">消息内容</label>
-                        <textarea id="taskMessage" placeholder="输入要定时发送的消息内容..." required></textarea>
+                        <textarea id="taskMessage" placeholder="输入要定时发送的消息内容..."></textarea>
+                    </div>
+
+                    <div class="form-group" id="taskImageGroup" style="display: none;">
+                        <label for="taskImageInput">选择图片</label>
+                        <input type="file" id="taskImageInput" accept="image/*" onchange="previewTaskImage(event)">
+                        <div id="taskImagePreview" style="margin-top: 10px; display: none;">
+                            <img id="taskImagePreviewImg" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                        </div>
                     </div>
 
                     <div class="form-group">
@@ -585,9 +619,29 @@
                 // 加载对应数据
                 if (targetTab === 'tasks') {
                     loadTasks();
+                    loadServerInfo();
                 }
             });
         });
+
+        // 加载服务器时区信息
+        async function loadServerInfo() {
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                const info = await response.json();
+
+                if (info.timezone && info.server_time) {
+                    const serverTime = new Date(info.server_time);
+                    const timeStr = serverTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                    document.getElementById('timezoneInfo').textContent =
+                        `⏰ 服务器时区: ${info.timezone} (UTC${info.timezone_offset}) · 当前服务器时间: ${timeStr}`;
+                }
+            } catch (error) {
+                console.error('加载服务器信息失败:', error);
+                document.getElementById('timezoneInfo').textContent =
+                    '⏰ 时区: 服务器本地时区（所有时间基于服务器时区）';
+            }
+        }
 
         // 加载群组列表
         async function loadGroups() {
@@ -648,7 +702,7 @@
         }
 
         // 发送消息
-        async function sendMessage(groupName, message) {
+        async function sendMessage(groupName, message, imageBase64 = null) {
             const btn = document.getElementById('sendBtn');
             const btnText = document.getElementById('btnText');
 
@@ -656,15 +710,22 @@
             btnText.innerHTML = '<span class="loading"></span> 发送中...';
 
             try {
+                const payload = {
+                    group_name: groupName
+                };
+
+                if (imageBase64) {
+                    payload.image_base64 = imageBase64;
+                } else {
+                    payload.message = message;
+                }
+
                 const response = await fetch(`${API_BASE}/api/send`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        group_name: groupName,
-                        message: message
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 const result = await response.json();
@@ -672,6 +733,9 @@
                 if (response.ok) {
                     showMessage('sendResultMessage', '✓ 消息发送成功！', 'success');
                     document.getElementById('messageText').value = '';
+                    document.getElementById('sendImage').value = '';
+                    document.getElementById('sendImagePreview').style.display = 'none';
+                    sendImageBase64 = '';
                 } else {
                     showMessage('sendResultMessage', `✗ ${result.detail || '发送失败'}`, 'error');
                 }
@@ -719,12 +783,20 @@
                                 <div class="task-info-value">${task.cron_expression}</div>
                             </div>
                             <div class="task-info-item">
+                                <div class="task-info-label">消息类型</div>
+                                <div class="task-info-value">${task.message_type === 'image' ? '📷 图片' : '💬 文本'}</div>
+                            </div>
+                            <div class="task-info-item">
                                 <div class="task-info-label">最后运行</div>
                                 <div class="task-info-value">${task.last_run || '从未运行'}</div>
                             </div>
                             <div class="task-info-item">
-                                <div class="task-info-label">消息内容</div>
-                                <div class="task-info-value">${task.message}</div>
+                                <div class="task-info-label">${task.message_type === 'image' ? '图片预览' : '消息内容'}</div>
+                                <div class="task-info-value">
+                                    ${task.message_type === 'image'
+                                        ? (task.image_base64 ? '<img src="data:image/png;base64,' + task.image_base64 + '" style="max-width: 200px; max-height: 100px; border-radius: 4px;">' : '无图片')
+                                        : task.message}
+                                </div>
                             </div>
                             <div class="task-info-item">
                                 <div class="task-info-label">目标群组</div>
@@ -757,6 +829,13 @@
             document.getElementById('taskFormTitle').textContent = '新建定时任务';
             document.getElementById('taskFormBtnText').textContent = '创建任务';
             document.getElementById('taskForm').reset();
+
+            // 重置图片预览和消息类型
+            taskImageBase64 = '';
+            document.getElementById('taskImagePreview').style.display = 'none';
+            document.getElementById('taskMessageType').value = 'text';
+            toggleTaskMessageType();
+
             document.getElementById('taskFormPanel').style.display = 'block';
             document.getElementById('taskFormPanel').scrollIntoView({ behavior: 'smooth' });
         }
@@ -765,6 +844,12 @@
         function hideTaskForm() {
             document.getElementById('taskFormPanel').style.display = 'none';
             document.getElementById('taskForm').reset();
+
+            // 重置图片预览
+            taskImageBase64 = '';
+            document.getElementById('taskImagePreview').style.display = 'none';
+            document.getElementById('taskImage').value = '';
+
             editingTaskId = null;
         }
 
@@ -783,6 +868,17 @@
                 document.getElementById('cronExpression').value = task.cron_expression;
                 document.getElementById('taskMessage').value = task.message;
                 document.getElementById('taskEnabled').value = task.enabled.toString();
+
+                // 设置消息类型
+                document.getElementById('taskMessageType').value = task.message_type || 'text';
+                toggleTaskMessageType();
+
+                // 如果是图片类型，显示预览
+                if (task.message_type === 'image' && task.image_base64) {
+                    taskImageBase64 = task.image_base64;
+                    document.getElementById('taskImagePreviewImg').src = 'data:image/png;base64,' + task.image_base64;
+                    document.getElementById('taskImagePreview').style.display = 'block';
+                }
 
                 // 设置目标群组复选框
                 document.querySelectorAll('input[name="targetGroups"]').forEach(checkbox => {
@@ -844,6 +940,74 @@
             }
         }
 
+        // 全局变量存储 base64 图片数据
+        let sendImageBase64 = '';
+        let taskImageBase64 = '';
+
+        // 切换发送消息类型
+        function toggleSendMessageType() {
+            const messageType = document.getElementById('sendMessageType').value;
+            const textGroup = document.getElementById('sendTextGroup');
+            const imageGroup = document.getElementById('sendImageGroup');
+
+            if (messageType === 'image') {
+                textGroup.style.display = 'none';
+                imageGroup.style.display = 'block';
+            } else {
+                textGroup.style.display = 'block';
+                imageGroup.style.display = 'none';
+            }
+        }
+
+        // 切换定时任务消息类型
+        function toggleTaskMessageType() {
+            const messageType = document.getElementById('taskMessageType').value;
+            const textGroup = document.getElementById('taskTextGroup');
+            const imageGroup = document.getElementById('taskImageGroup');
+
+            if (messageType === 'image') {
+                textGroup.style.display = 'none';
+                imageGroup.style.display = 'block';
+            } else {
+                textGroup.style.display = 'block';
+                imageGroup.style.display = 'none';
+            }
+        }
+
+        // 预览发送消息图片
+        function previewSendImage(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                // 保存 base64 数据（去除前缀）
+                sendImageBase64 = e.target.result.split(',')[1];
+
+                // 显示预览
+                document.getElementById('sendImagePreviewImg').src = e.target.result;
+                document.getElementById('sendImagePreview').style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 预览定时任务图片
+        function previewTaskImage(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                // 保存 base64 数据（去除前缀）
+                taskImageBase64 = e.target.result.split(',')[1];
+
+                // 显示预览
+                document.getElementById('taskImagePreviewImg').src = e.target.result;
+                document.getElementById('taskImagePreview').style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+
         // 显示提示消息
         function showMessage(elementId, text, type) {
             const msgEl = document.getElementById(elementId);
@@ -861,14 +1025,27 @@
             e.preventDefault();
 
             const groupName = document.getElementById('groupSelect').value;
-            const message = document.getElementById('messageText').value.trim();
+            const messageType = document.getElementById('sendMessageType').value;
 
-            if (!groupName || !message) {
-                showMessage('sendResultMessage', '请选择群聊并输入消息', 'error');
+            if (!groupName) {
+                showMessage('sendResultMessage', '请选择群聊', 'error');
                 return;
             }
 
-            await sendMessage(groupName, message);
+            if (messageType === 'text') {
+                const message = document.getElementById('messageText').value.trim();
+                if (!message) {
+                    showMessage('sendResultMessage', '请输入消息内容', 'error');
+                    return;
+                }
+                await sendMessage(groupName, message);
+            } else {
+                if (!sendImageBase64) {
+                    showMessage('sendResultMessage', '请选择要发送的图片', 'error');
+                    return;
+                }
+                await sendMessage(groupName, null, sendImageBase64);
+            }
         });
 
         // 表单提交 - 创建/编辑任务
@@ -886,13 +1063,24 @@
                 const targetGroups = Array.from(document.querySelectorAll('input[name="targetGroups"]:checked'))
                     .map(cb => cb.value);
 
+                const messageType = document.getElementById('taskMessageType').value;
+
                 const data = {
                     name: document.getElementById('taskName').value,
                     cron_expression: document.getElementById('cronExpression').value,
-                    message: document.getElementById('taskMessage').value,
+                    message_type: messageType,
                     target_groups: targetGroups,
                     enabled: document.getElementById('taskEnabled').value === 'true'
                 };
+
+                // 根据消息类型设置内容
+                if (messageType === 'text') {
+                    data.message = document.getElementById('taskMessage').value;
+                    data.image_base64 = '';
+                } else {
+                    data.message = '';
+                    data.image_base64 = taskImageBase64;
+                }
 
                 const url = editingTaskId ? `${API_BASE}/api/tasks/${editingTaskId}` : `${API_BASE}/api/tasks`;
                 const method = editingTaskId ? 'PUT' : 'POST';
@@ -911,6 +1099,9 @@
                     showMessage('taskFormResultMessage', `✓ ${editingTaskId ? '任务已更新' : '任务已创建'}`, 'success');
                     hideTaskForm();
                     loadTasks();
+                    // 清空图片预览
+                    taskImageBase64 = '';
+                    document.getElementById('taskImagePreview').style.display = 'none';
                 } else {
                     showMessage('taskFormResultMessage', `✗ ${result.detail || '操作失败'}`, 'error');
                 }
@@ -923,8 +1114,9 @@
             }
         });
 
-        // 页面加载时获取群组列表
+        // 页面加载时获取群组列表和服务器信息
         loadGroups();
+        loadServerInfo();
 
         // 每30秒刷新一次群组列表
         setInterval(loadGroups, 30000);

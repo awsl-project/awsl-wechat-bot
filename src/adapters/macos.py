@@ -85,6 +85,43 @@ class MacOSWeChatAdapter(BaseWeChatAdapter):
         """向指定窗口发送消息（macOS 单群模式）"""
         return self.send_text(text)
 
+    def send_image_to_window(self, window: MacOSWindow, image_base64: str) -> bool:
+        """向指定窗口发送图片（base64编码）
+
+        Args:
+            window: 窗口对象
+            image_base64: base64 编码的图片数据
+
+        Returns:
+            bool: 是否发送成功
+        """
+        import base64
+        import tempfile
+        import os
+
+        try:
+            # 解码 base64 数据
+            image_data = base64.b64decode(image_base64)
+
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                tmp_file.write(image_data)
+                tmp_path = tmp_file.name
+
+            # 使用现有的 send_image 方法发送
+            success = self.send_image(tmp_path)
+
+            # 删除临时文件
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+
+            return success
+        except Exception as e:
+            logger.error(f"发送图片失败: {e}")
+            return False
+
     def click_input_box(self):
         """点击输入框以获得焦点"""
         script = f'''
