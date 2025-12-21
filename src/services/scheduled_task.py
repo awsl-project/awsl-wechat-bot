@@ -199,15 +199,15 @@ class ScheduledTaskService:
         Returns:
             任务对象，不存在返回 None
         """
-        with self.db_lock:
-            cursor = self.conn.execute(
-                'SELECT * FROM scheduled_tasks WHERE id = ?',
-                (task_id,)
-            )
-            row = cursor.fetchone()
-            if row:
-                return self._row_to_task(row)
-            return None
+        # 读操作不需要锁，WAL 模式支持并发读
+        cursor = self.conn.execute(
+            'SELECT * FROM scheduled_tasks WHERE id = ?',
+            (task_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return self._row_to_task(row)
+        return None
 
     def get_all_tasks(self) -> List[ScheduledTask]:
         """
@@ -216,10 +216,10 @@ class ScheduledTaskService:
         Returns:
             任务列表
         """
-        with self.db_lock:
-            cursor = self.conn.execute('SELECT * FROM scheduled_tasks ORDER BY id DESC')
-            rows = cursor.fetchall()
-            return [self._row_to_task(row) for row in rows]
+        # 读操作不需要锁，WAL 模式支持并发读
+        cursor = self.conn.execute('SELECT * FROM scheduled_tasks ORDER BY id DESC')
+        rows = cursor.fetchall()
+        return [self._row_to_task(row) for row in rows]
 
     def get_enabled_tasks(self) -> List[ScheduledTask]:
         """
@@ -228,12 +228,12 @@ class ScheduledTaskService:
         Returns:
             已启用的任务列表
         """
-        with self.db_lock:
-            cursor = self.conn.execute(
-                'SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY id'
-            )
-            rows = cursor.fetchall()
-            return [self._row_to_task(row) for row in rows]
+        # 读操作不需要锁，WAL 模式支持并发读
+        cursor = self.conn.execute(
+            'SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY id'
+        )
+        rows = cursor.fetchall()
+        return [self._row_to_task(row) for row in rows]
 
     def update_task(
         self,
