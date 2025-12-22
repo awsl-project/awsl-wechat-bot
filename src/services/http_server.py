@@ -100,6 +100,10 @@ class HTTPServer:
         self.scheduler_running = False
         self.scheduler_thread = None
 
+        # 任务执行锁，防止并发执行同一任务
+        self.task_execution_lock = threading.Lock()
+        self.executing_tasks = set()  # 正在执行的任务ID
+
         self._setup_routes()
 
     def _setup_routes(self):
@@ -372,43 +376,55 @@ class HTTPServer:
                 for task in tasks:
                     # 检查任务是否应该运行
                     if self.task_service.should_run(task, current_time):
-                        task_desc = f"{task.name} - {task.message_type}"
-                        logger.info(f"⏰ 执行定时任务: {task_desc}")
-
-                        # 解析目标群组
-                        try:
-                            target_groups = json.loads(task.target_groups) if task.target_groups else []
-                        except json.JSONDecodeError:
-                            target_groups = []
-
-                        # 如果没有指定目标群组，发送到所有群
-                        if not target_groups:
-                            groups_to_send = self.bot.groups
-                        else:
-                            # 只发送到指定的群
-                            groups_to_send = [g for g in self.bot.groups if g["name"] in target_groups]
-
-                        # 发送消息或图片到目标群组
-                        for group in groups_to_send:
-                            # 检查窗口是否存在
-                            if not group["window"].Exists(0.5):
-                                logger.debug(f"群 [{group['name']}] 窗口已关闭，跳过定时任务")
+                        # 使用锁检查并标记任务是否正在执行，防止重复触发
+                        with self.task_execution_lock:
+                            if task.id in self.executing_tasks:
+                                logger.debug(f"⏰ 任务 {task.name} 正在执行中，跳过")
                                 continue
+                            self.executing_tasks.add(task.id)
 
+                        try:
+                            task_desc = f"{task.name} - {task.message_type}"
+                            logger.info(f"⏰ 执行定时任务: {task_desc}")
+
+                            # 立即更新最后运行时间，防止重复触发
+                            self.task_service.update_last_run(task.id)
+
+                            # 解析目标群组
                             try:
-                                if task.message_type == "image":
-                                    # 发送图片
-                                    self.bot.wechat.send_image_to_window(group["window"], task.image_base64)
-                                    logger.info(f"⏰ 定时任务图片已发送到 [{group['name']}]")
-                                else:
-                                    # 发送文本
-                                    self.bot.wechat.send_text_to_window(group["window"], task.message)
-                                    logger.info(f"⏰ 定时任务消息已发送到 [{group['name']}]")
-                            except Exception as e:
-                                logger.error(f"⏰ 定时任务发送失败 [{group['name']}]: {e}")
+                                target_groups = json.loads(task.target_groups) if task.target_groups else []
+                            except json.JSONDecodeError:
+                                target_groups = []
 
-                        # 更新最后运行时间
-                        self.task_service.update_last_run(task.id)
+                            # 如果没有指定目标群组，发送到所有群
+                            if not target_groups:
+                                groups_to_send = self.bot.groups
+                            else:
+                                # 只发送到指定的群
+                                groups_to_send = [g for g in self.bot.groups if g["name"] in target_groups]
+
+                            # 发送消息或图片到目标群组
+                            for group in groups_to_send:
+                                # 检查窗口是否存在
+                                if not group["window"].Exists(0.5):
+                                    logger.debug(f"群 [{group['name']}] 窗口已关闭，跳过定时任务")
+                                    continue
+
+                                try:
+                                    if task.message_type == "image":
+                                        # 发送图片
+                                        self.bot.wechat.send_image_to_window(group["window"], task.image_base64)
+                                        logger.info(f"⏰ 定时任务图片已发送到 [{group['name']}]")
+                                    else:
+                                        # 发送文本
+                                        self.bot.wechat.send_text_to_window(group["window"], task.message)
+                                        logger.info(f"⏰ 定时任务消息已发送到 [{group['name']}]")
+                                except Exception as e:
+                                    logger.error(f"⏰ 定时任务发送失败 [{group['name']}]: {e}")
+                        finally:
+                            # 无论成功失败，都要从执行集合中移除
+                            with self.task_execution_lock:
+                                self.executing_tasks.discard(task.id)
 
                 # 每5秒检查一次（减少数据库访问频率）
                 time.sleep(5)
