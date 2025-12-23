@@ -106,7 +106,7 @@ class ScheduledTaskService:
 
                 self.conn.commit()
             else:
-                # 创建新表
+                # 创建新表（使用本地时间而不是 UTC）
                 self.conn.execute('''
                     CREATE TABLE scheduled_tasks (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,8 +117,8 @@ class ScheduledTaskService:
                         image_base64 TEXT DEFAULT '',
                         target_groups TEXT DEFAULT '',
                         enabled INTEGER DEFAULT 1,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+                        updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
                         last_run TIMESTAMP
                     )
                 ''')
@@ -337,6 +337,7 @@ class ScheduledTaskService:
         """
         with self.db_lock:
             try:
+                # 使用 UTC 时间（CURRENT_TIMESTAMP），与 should_run 中的 UTC 比较保持一致
                 self.conn.execute(
                     'UPDATE scheduled_tasks SET last_run = CURRENT_TIMESTAMP WHERE id = ?',
                     (task_id,)
@@ -351,7 +352,7 @@ class ScheduledTaskService:
 
         Args:
             task: 任务对象
-            current_time: 当前时间
+            current_time: 当前本地时间（用于 cron 计算）
 
         Returns:
             是否应该运行
@@ -360,40 +361,45 @@ class ScheduledTaskService:
             return False
 
         try:
-            # 使用 croniter 检查是否到了执行时间
+            # 使用 croniter 检查是否到了执行时间（基于本地时间）
             cron = croniter(task.cron_expression, current_time)
-            # 获取上次应该运行的时间
-            prev_run = cron.get_prev(datetime)
+            # 获取上次应该运行的时间（本地时间）
+            prev_run_local = cron.get_prev(datetime)
 
             # 获取下次应该运行的时间
             next_run = cron.get_next(datetime)
 
             # 计算当前时间距离上次应该执行的时间差（秒）
-            time_since_prev = (current_time - prev_run).total_seconds()
+            time_since_prev = (current_time - prev_run_local).total_seconds()
 
-            # 如果距离上次执行时间在65秒内，认为当前在执行窗口内
-            # 窗口设置为65秒，以适应5秒的检查间隔（5*13=65秒）
-            in_execution_window = 0 <= time_since_prev <= 65
+            # 如果距离上次执行时间在30秒内，认为当前在执行窗口内
+            # 窗口设置为30秒，容忍调度器5秒检查间隔的延迟（最多6次检查机会）
+            in_execution_window = 0 <= time_since_prev <= 30
 
             # 如果从未运行过，只有在执行窗口内才运行
             if task.last_run is None or not task.last_run.strip():
                 return in_execution_window
 
-            # 解析最后运行时间
+            # 解析最后运行时间（数据库存储的是 UTC 时间）
             try:
                 # 尝试多种时间格式
                 last_run_str = task.last_run.replace('Z', '+00:00')
-                # SQLite CURRENT_TIMESTAMP 格式: YYYY-MM-DD HH:MM:SS
+                # SQLite CURRENT_TIMESTAMP 格式: YYYY-MM-DD HH:MM:SS (UTC)
                 if ' ' in last_run_str and '+' not in last_run_str:
-                    last_run_dt = datetime.strptime(last_run_str, '%Y-%m-%d %H:%M:%S')
+                    last_run_utc = datetime.strptime(last_run_str, '%Y-%m-%d %H:%M:%S')
                 else:
-                    last_run_dt = datetime.fromisoformat(last_run_str)
+                    last_run_utc = datetime.fromisoformat(last_run_str)
             except (ValueError, AttributeError) as e:
                 logger.warning(f"无法解析任务 {task.id} 的 last_run 时间 '{task.last_run}': {e}，视为从未运行")
                 return in_execution_window
 
-            # 如果上次应该运行的时间在最后运行时间之后，且当前在执行窗口内，说明需要运行
-            return prev_run > last_run_dt and in_execution_window
+            # 将本地时间的 prev_run 转换为 UTC 进行比较
+            # 计算本地时间与 UTC 的时差
+            utc_offset = datetime.now() - datetime.utcnow()
+            prev_run_utc = prev_run_local - utc_offset
+
+            # 比较两个 UTC 时间：如果上次应该运行的时间在最后运行时间之后，且当前在执行窗口内，说明需要运行
+            return prev_run_utc > last_run_utc and in_execution_window
         except Exception as e:
             logger.error(f"检查任务 {task.id} 运行时间失败: {e}")
             return False

@@ -368,6 +368,7 @@ class HTTPServer:
 
         while self.scheduler_running:
             try:
+                # 使用本地时间进行 cron 计算（用户期望的触发时间）
                 current_time = datetime.now()
 
                 # 获取所有启用的任务
