@@ -65,6 +65,7 @@ class Config(BaseSettings):
     HTTP_API_ENABLED: bool = True
     HTTP_API_HOST: str = "0.0.0.0"
     HTTP_API_PORT: int = 8000
+    HTTP_API_TOKEN: str = ""  # Bearer Token 认证，为空则不启用认证
 
     model_config = SettingsConfigDict(
         env_file=".env",

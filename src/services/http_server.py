@@ -10,14 +10,46 @@ import time
 import threading
 from datetime import datetime
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 
 from .scheduled_task import ScheduledTaskService
+from config import config
 
 logger = logging.getLogger(__name__)
+
+# HTTP Bearer 认证
+security = HTTPBearer(auto_error=False)
+
+
+def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> bool:
+    """
+    验证 Bearer Token
+    如果 HTTP_API_TOKEN 为空，则不启用认证
+    """
+    # 如果没有配置 token，则不启用认证
+    if not config.HTTP_API_TOKEN:
+        return True
+
+    # 如果配置了 token，则必须提供有效的认证
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="未提供认证信息",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    if credentials.credentials != config.HTTP_API_TOKEN:
+        raise HTTPException(
+            status_code=401,
+            detail="无效的 Token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    return True
 
 
 class SendMessageRequest(BaseModel):
@@ -133,10 +165,11 @@ class HTTPServer:
                 "groups_count": len(self.bot.groups),
                 "server_time": datetime.now().isoformat(),
                 "timezone": time.strftime("%Z"),
-                "timezone_offset": time.strftime("%z")
+                "timezone_offset": time.strftime("%z"),
+                "auth_enabled": bool(config.HTTP_API_TOKEN)
             }
 
-        @self.app.get("/api/groups", response_model=list[GroupInfo])
+        @self.app.get("/api/groups", response_model=list[GroupInfo], dependencies=[Depends(verify_token)])
         async def list_groups():
             """列出所有聊天窗口"""
             groups = []
@@ -156,7 +189,7 @@ class HTTPServer:
                     ))
             return groups
 
-        @self.app.post("/api/send", response_model=SendMessageResponse)
+        @self.app.post("/api/send", response_model=SendMessageResponse, dependencies=[Depends(verify_token)])
         async def send_message(request: SendMessageRequest):
             """
             向指定聊天窗口发送消息或图片
@@ -235,13 +268,13 @@ class HTTPServer:
                     detail=f"操作失败: {str(e)}"
                 )
 
-        @self.app.get("/api/tasks", response_model=List[ScheduledTaskResponse])
+        @self.app.get("/api/tasks", response_model=List[ScheduledTaskResponse], dependencies=[Depends(verify_token)])
         async def list_scheduled_tasks():
             """获取所有定时任务"""
             tasks = self.task_service.get_all_tasks()
             return [self._task_to_response(task) for task in tasks]
 
-        @self.app.post("/api/tasks", response_model=ScheduledTaskResponse)
+        @self.app.post("/api/tasks", response_model=ScheduledTaskResponse, dependencies=[Depends(verify_token)])
         async def create_scheduled_task(request: ScheduledTaskCreate):
             """创建定时任务"""
             # 将 target_groups 列表转换为 JSON 字符串
@@ -266,7 +299,7 @@ class HTTPServer:
             logger.info(f"[HTTP API] 创建定时任务: {task.name}")
             return self._task_to_response(task)
 
-        @self.app.get("/api/tasks/{task_id}", response_model=ScheduledTaskResponse)
+        @self.app.get("/api/tasks/{task_id}", response_model=ScheduledTaskResponse, dependencies=[Depends(verify_token)])
         async def get_scheduled_task(task_id: int):
             """获取指定定时任务"""
             task = self.task_service.get_task(task_id)
@@ -278,7 +311,7 @@ class HTTPServer:
 
             return self._task_to_response(task)
 
-        @self.app.put("/api/tasks/{task_id}", response_model=ScheduledTaskResponse)
+        @self.app.put("/api/tasks/{task_id}", response_model=ScheduledTaskResponse, dependencies=[Depends(verify_token)])
         async def update_scheduled_task(task_id: int, request: ScheduledTaskUpdate):
             """更新定时任务"""
             # 检查任务是否存在
@@ -319,7 +352,7 @@ class HTTPServer:
             updated_task = self.task_service.get_task(task_id)
             return self._task_to_response(updated_task)
 
-        @self.app.delete("/api/tasks/{task_id}")
+        @self.app.delete("/api/tasks/{task_id}", dependencies=[Depends(verify_token)])
         async def delete_scheduled_task(task_id: int):
             """删除定时任务"""
             # 检查任务是否存在

@@ -64,6 +64,79 @@
             animation: pulse 2s infinite;
         }
 
+        .auth-section {
+            background: #fef3c7;
+            border: 2px solid #f59e0b;
+            border-radius: 12px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .auth-section.authenticated {
+            background: #d1fae5;
+            border-color: #10b981;
+        }
+
+        .auth-section label {
+            font-size: 14px;
+            font-weight: 600;
+            color: #92400e;
+            margin-bottom: 8px;
+        }
+
+        .auth-section.authenticated label {
+            color: #065f46;
+        }
+
+        .auth-input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .auth-input-group input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .auth-input-group input:focus {
+            outline: none;
+            border-color: #f59e0b;
+        }
+
+        .auth-section.authenticated .auth-input-group input:focus {
+            border-color: #10b981;
+        }
+
+        .btn-auth {
+            padding: 10px 16px;
+            background: #f59e0b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-auth:hover {
+            background: #d97706;
+        }
+
+        .auth-status {
+            font-size: 12px;
+            margin-top: 8px;
+            color: #92400e;
+        }
+
+        .auth-section.authenticated .auth-status {
+            color: #065f46;
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -440,6 +513,16 @@
                 <div class="status-dot"></div>
                 <span id="statusText">加载中...</span>
             </div>
+
+            <div id="authSection" class="auth-section" style="display: none;">
+                <label>🔐 API 认证 Token</label>
+                <div class="auth-input-group">
+                    <input type="password" id="authToken" placeholder="输入 Bearer Token...">
+                    <button type="button" class="btn-auth" onclick="saveToken()">保存</button>
+                    <button type="button" class="btn-auth" onclick="clearToken()" style="background: #6b7280;">清除</button>
+                </div>
+                <div id="authStatus" class="auth-status"></div>
+            </div>
         </div>
 
         <div class="tabs">
@@ -602,21 +685,144 @@
         const API_BASE = '';
         let allGroups = [];
         let editingTaskId = null;
+        let authEnabled = false;
 
-        // Tab 切换
+        // ==================== 工具函数 ====================
+
+        // 获取 DOM 元素
+        const $ = id => document.getElementById(id);
+
+        // Token 管理
+        function getToken() {
+            return localStorage.getItem('awsl_api_token') || '';
+        }
+
+        function saveToken() {
+            const token = $('authToken').value.trim();
+            if (token) {
+                localStorage.setItem('awsl_api_token', token);
+                updateAuthUI();
+                loadGroups();
+            }
+        }
+
+        function clearToken() {
+            localStorage.removeItem('awsl_api_token');
+            $('authToken').value = '';
+            updateAuthUI();
+            loadGroups();
+        }
+
+        function updateAuthUI() {
+            const token = getToken();
+            const authSection = $('authSection');
+            const authStatus = $('authStatus');
+
+            if (authEnabled) {
+                authSection.style.display = 'block';
+                if (token) {
+                    authSection.classList.add('authenticated');
+                    authStatus.textContent = '✓ Token 已保存，将在请求时使用';
+                    $('authToken').value = token;
+                } else {
+                    authSection.classList.remove('authenticated');
+                    authStatus.textContent = '⚠ 服务器已启用认证，请输入 Token';
+                }
+            } else {
+                authSection.style.display = 'none';
+            }
+        }
+
+        // 获取带认证的 headers
+        function getAuthHeaders() {
+            const headers = { 'Content-Type': 'application/json' };
+            const token = getToken();
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            return headers;
+        }
+
+        // 通用 API 请求封装
+        async function apiRequest(endpoint, options = {}) {
+            const { method = 'GET', body = null, errorMsg = '请求失败' } = options;
+            try {
+                const fetchOptions = { method, headers: getAuthHeaders() };
+                if (body) fetchOptions.body = JSON.stringify(body);
+
+                const response = await fetch(`${API_BASE}${endpoint}`, fetchOptions);
+
+                if (response.status === 401) {
+                    return { ok: false, error: '认证失败，请检查 Token', status: 401 };
+                }
+
+                const data = await response.json();
+                return { ok: response.ok, data, status: response.status };
+            } catch (error) {
+                console.error(`${errorMsg}:`, error);
+                return { ok: false, error: '网络错误，请重试' };
+            }
+        }
+
+        // 显示提示消息
+        function showMessage(elementId, text, type) {
+            const msgEl = $(elementId);
+            msgEl.textContent = text;
+            msgEl.className = `message ${type}`;
+            msgEl.style.display = 'block';
+            setTimeout(() => { msgEl.style.display = 'none'; }, 5000);
+        }
+
+        // 通用消息类型切换
+        function toggleMessageType(typeSelectId, textGroupId, imageGroupId) {
+            const messageType = $(typeSelectId).value;
+            $(textGroupId).style.display = messageType === 'image' ? 'none' : 'block';
+            $(imageGroupId).style.display = messageType === 'image' ? 'block' : 'none';
+        }
+
+        // 通用图片预览
+        function previewImage(event, base64Setter, previewImgId, previewContainerId) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                base64Setter(e.target.result.split(',')[1]);
+                $(previewImgId).src = e.target.result;
+                $(previewContainerId).style.display = 'block';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ==================== 全局变量 ====================
+        let sendImageBase64 = '';
+        let taskImageBase64 = '';
+
+        // ==================== 消息类型切换 ====================
+        function toggleSendMessageType() {
+            toggleMessageType('sendMessageType', 'sendTextGroup', 'sendImageGroup');
+        }
+
+        function toggleTaskMessageType() {
+            toggleMessageType('taskMessageType', 'taskTextGroup', 'taskImageGroup');
+        }
+
+        // ==================== 图片预览 ====================
+        function previewSendImage(event) {
+            previewImage(event, v => sendImageBase64 = v, 'sendImagePreviewImg', 'sendImagePreview');
+        }
+
+        function previewTaskImage(event) {
+            previewImage(event, v => taskImageBase64 = v, 'taskImagePreviewImg', 'taskImagePreview');
+        }
+
+        // ==================== Tab 切换 ====================
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const targetTab = tab.dataset.tab;
-
-                // 更新 tab 激活状态
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
-
-                // 更新面板显示
                 document.querySelectorAll('.content-panel').forEach(p => p.classList.remove('active'));
-                document.getElementById(`${targetTab}-panel`).classList.add('active');
+                $(`${targetTab}-panel`).classList.add('active');
 
-                // 加载对应数据
                 if (targetTab === 'tasks') {
                     loadTasks();
                     loadServerInfo();
@@ -624,65 +830,65 @@
             });
         });
 
-        // 加载服务器时区信息
+        // ==================== 数据加载 ====================
         async function loadServerInfo() {
-            try {
-                const response = await fetch(`${API_BASE}/api/health`);
-                const info = await response.json();
-
+            const result = await apiRequest('/api/health', { errorMsg: '加载服务器信息失败' });
+            if (result.ok && result.data) {
+                const info = result.data;
+                if (info.auth_enabled !== undefined) {
+                    authEnabled = info.auth_enabled;
+                    updateAuthUI();
+                }
                 if (info.timezone && info.server_time) {
                     const serverTime = new Date(info.server_time);
                     const timeStr = serverTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-                    document.getElementById('timezoneInfo').textContent =
+                    $('timezoneInfo').textContent =
                         `⏰ 服务器时区: ${info.timezone} (UTC${info.timezone_offset}) · 当前服务器时间: ${timeStr}`;
                 }
-            } catch (error) {
-                console.error('加载服务器信息失败:', error);
-                document.getElementById('timezoneInfo').textContent =
-                    '⏰ 时区: 服务器本地时区（所有时间基于服务器时区）';
+            } else {
+                $('timezoneInfo').textContent = '⏰ 时区: 服务器本地时区（所有时间基于服务器时区）';
             }
         }
 
-        // 加载群组列表
         async function loadGroups() {
-            try {
-                const response = await fetch(`${API_BASE}/api/groups`);
-                allGroups = await response.json();
+            const result = await apiRequest('/api/groups', { errorMsg: '加载群组失败' });
 
-                // 更新发送消息的下拉框
-                const select = document.getElementById('groupSelect');
-                select.innerHTML = '';
-
-                if (allGroups.length === 0) {
-                    select.innerHTML = '<option value="">暂无可用群聊</option>';
-                    document.getElementById('statusText').textContent = '未检测到群聊窗口';
-                    return;
-                }
-
-                allGroups.forEach(group => {
-                    const option = document.createElement('option');
-                    option.value = group.name;
-                    option.textContent = `${group.name} ${group.active ? '✓' : '✗ 已关闭'}`;
-                    option.disabled = !group.active;
-                    select.appendChild(option);
-                });
-
-                // 更新目标群组复选框
-                updateTargetGroupsCheckboxes();
-
-                document.getElementById('statusText').textContent =
-                    `服务运行中 · ${allGroups.length} 个群聊`;
-
-            } catch (error) {
-                console.error('加载群组失败:', error);
-                document.getElementById('statusText').textContent = '连接失败';
-                showMessage('sendResultMessage', '无法连接到服务器', 'error');
+            if (result.status === 401) {
+                $('statusText').textContent = '认证失败，请检查 Token';
+                showMessage('sendResultMessage', '认证失败，请输入正确的 Token', 'error');
+                return;
             }
+
+            if (!result.ok) {
+                $('statusText').textContent = '连接失败';
+                showMessage('sendResultMessage', '无法连接到服务器', 'error');
+                return;
+            }
+
+            allGroups = result.data;
+            const select = $('groupSelect');
+            select.innerHTML = '';
+
+            if (allGroups.length === 0) {
+                select.innerHTML = '<option value="">暂无可用群聊</option>';
+                $('statusText').textContent = '未检测到群聊窗口';
+                return;
+            }
+
+            allGroups.forEach(group => {
+                const option = document.createElement('option');
+                option.value = group.name;
+                option.textContent = `${group.name} ${group.active ? '✓' : '✗ 已关闭'}`;
+                option.disabled = !group.active;
+                select.appendChild(option);
+            });
+
+            updateTargetGroupsCheckboxes();
+            $('statusText').textContent = `服务运行中 · ${allGroups.length} 个群聊`;
         }
 
-        // 更新目标群组复选框
         function updateTargetGroupsCheckboxes() {
-            const container = document.getElementById('targetGroupsCheckboxes');
+            const container = $('targetGroupsCheckboxes');
             container.innerHTML = '';
 
             allGroups.forEach(group => {
@@ -696,346 +902,223 @@
 
                 label.appendChild(checkbox);
                 label.appendChild(document.createTextNode(group.name));
-
                 container.appendChild(label);
             });
         }
 
-        // 发送消息
+        // ==================== 消息发送 ====================
         async function sendMessage(groupName, message, imageBase64 = null) {
-            const btn = document.getElementById('sendBtn');
-            const btnText = document.getElementById('btnText');
+            const btn = $('sendBtn');
+            const btnText = $('btnText');
 
             btn.disabled = true;
             btnText.innerHTML = '<span class="loading"></span> 发送中...';
 
             try {
-                const payload = {
-                    group_name: groupName
-                };
-
+                const payload = { group_name: groupName };
                 if (imageBase64) {
                     payload.image_base64 = imageBase64;
                 } else {
                     payload.message = message;
                 }
 
-                const response = await fetch(`${API_BASE}/api/send`, {
+                const result = await apiRequest('/api/send', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(payload)
+                    body: payload,
+                    errorMsg: '发送失败'
                 });
 
-                console.log('Response status:', response.status, response.ok);
-                const result = await response.json();
-                console.log('Response body:', result);
-
-                if (response.ok) {
+                if (result.ok) {
                     showMessage('sendResultMessage', '✓ 消息发送成功！', 'success');
-
-                    // 清空表单（检查元素是否存在）
-                    const messageTextEl = document.getElementById('messageText');
+                    // 清空表单
+                    const messageTextEl = $('messageText');
                     if (messageTextEl) messageTextEl.value = '';
-
-                    const sendImageEl = document.getElementById('sendImage');
-                    if (sendImageEl) sendImageEl.value = '';
-
-                    const sendImagePreviewEl = document.getElementById('sendImagePreview');
+                    const sendImagePreviewEl = $('sendImagePreview');
                     if (sendImagePreviewEl) sendImagePreviewEl.style.display = 'none';
-
                     sendImageBase64 = '';
                 } else {
-                    showMessage('sendResultMessage', `✗ ${result.detail || '发送失败'}`, 'error');
+                    showMessage('sendResultMessage', `✗ ${result.data?.detail || result.error || '发送失败'}`, 'error');
                 }
-            } catch (error) {
-                console.error('发送失败:', error);
-                showMessage('sendResultMessage', '✗ 网络错误，请重试', 'error');
             } finally {
                 btn.disabled = false;
                 btnText.textContent = '发送消息';
             }
         }
 
-        // 加载定时任务列表
+        // ==================== 定时任务管理 ====================
         async function loadTasks() {
-            try {
-                const response = await fetch(`${API_BASE}/api/tasks`);
-                const tasks = await response.json();
+            const result = await apiRequest('/api/tasks', { errorMsg: '加载任务列表失败' });
 
-                const container = document.getElementById('tasksList');
-
-                if (tasks.length === 0) {
-                    container.innerHTML = `
-                        <div class="empty-state">
-                            <div class="empty-state-icon">⏰</div>
-                            <p>暂无定时任务，点击"新建任务"创建第一个定时任务</p>
-                        </div>
-                    `;
-                    return;
-                }
-
-                container.innerHTML = tasks.map(task => `
-                    <div class="task-item">
-                        <div class="task-header">
-                            <div>
-                                <div class="task-title">${task.name}</div>
-                                <span class="task-status ${task.enabled ? 'enabled' : 'disabled'}">
-                                    ${task.enabled ? '✓ 已启用' : '✗ 已禁用'}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div class="task-info">
-                            <div class="task-info-item">
-                                <div class="task-info-label">Cron 表达式</div>
-                                <div class="task-info-value">${task.cron_expression}</div>
-                            </div>
-                            <div class="task-info-item">
-                                <div class="task-info-label">消息类型</div>
-                                <div class="task-info-value">${task.message_type === 'image' ? '📷 图片' : '💬 文本'}</div>
-                            </div>
-                            <div class="task-info-item">
-                                <div class="task-info-label">最后运行</div>
-                                <div class="task-info-value">${task.last_run || '从未运行'}</div>
-                            </div>
-                            <div class="task-info-item">
-                                <div class="task-info-label">${task.message_type === 'image' ? '图片预览' : '消息内容'}</div>
-                                <div class="task-info-value">
-                                    ${task.message_type === 'image'
-                                        ? (task.image_base64 ? '<img src="data:image/png;base64,' + task.image_base64 + '" style="max-width: 200px; max-height: 100px; border-radius: 4px;">' : '无图片')
-                                        : task.message}
-                                </div>
-                            </div>
-                            <div class="task-info-item">
-                                <div class="task-info-label">目标群组</div>
-                                <div class="task-info-value">
-                                    ${task.target_groups.length > 0 ? task.target_groups.join(', ') : '所有群组'}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="task-actions">
-                            <button class="btn btn-small" onclick="editTask(${task.id})">编辑</button>
-                            <button class="btn btn-small ${task.enabled ? 'btn-secondary' : ''}"
-                                    onclick="toggleTask(${task.id}, ${task.enabled})">
-                                ${task.enabled ? '禁用' : '启用'}
-                            </button>
-                            <button class="btn btn-small btn-danger" onclick="deleteTask(${task.id})">删除</button>
-                        </div>
-                    </div>
-                `).join('');
-
-            } catch (error) {
-                console.error('加载任务列表失败:', error);
-                showMessage('taskFormResultMessage', '加载任务列表失败', 'error');
-            }
-        }
-
-        // 显示任务表单
-        function showTaskForm() {
-            editingTaskId = null;
-            document.getElementById('taskFormTitle').textContent = '新建定时任务';
-            document.getElementById('taskFormBtnText').textContent = '创建任务';
-            document.getElementById('taskForm').reset();
-
-            // 重置图片预览和消息类型
-            taskImageBase64 = '';
-            document.getElementById('taskImagePreview').style.display = 'none';
-            document.getElementById('taskMessageType').value = 'text';
-            toggleTaskMessageType();
-
-            document.getElementById('taskFormPanel').style.display = 'block';
-            document.getElementById('taskFormPanel').scrollIntoView({ behavior: 'smooth' });
-        }
-
-        // 隐藏任务表单
-        function hideTaskForm() {
-            document.getElementById('taskFormPanel').style.display = 'none';
-            document.getElementById('taskForm').reset();
-
-            // 重置图片预览
-            taskImageBase64 = '';
-            document.getElementById('taskImagePreview').style.display = 'none';
-            document.getElementById('taskImage').value = '';
-
-            editingTaskId = null;
-        }
-
-        // 编辑任务
-        async function editTask(taskId) {
-            try {
-                const response = await fetch(`${API_BASE}/api/tasks/${taskId}`);
-                const task = await response.json();
-
-                editingTaskId = taskId;
-                document.getElementById('taskFormTitle').textContent = '编辑定时任务';
-                document.getElementById('taskFormBtnText').textContent = '保存修改';
-
-                document.getElementById('taskId').value = task.id;
-                document.getElementById('taskName').value = task.name;
-                document.getElementById('cronExpression').value = task.cron_expression;
-                document.getElementById('taskMessage').value = task.message;
-                document.getElementById('taskEnabled').value = task.enabled.toString();
-
-                // 设置消息类型
-                document.getElementById('taskMessageType').value = task.message_type || 'text';
-                toggleTaskMessageType();
-
-                // 如果是图片类型，显示预览
-                if (task.message_type === 'image' && task.image_base64) {
-                    taskImageBase64 = task.image_base64;
-                    document.getElementById('taskImagePreviewImg').src = 'data:image/png;base64,' + task.image_base64;
-                    document.getElementById('taskImagePreview').style.display = 'block';
-                }
-
-                // 设置目标群组复选框
-                document.querySelectorAll('input[name="targetGroups"]').forEach(checkbox => {
-                    checkbox.checked = task.target_groups.includes(checkbox.value);
-                });
-
-                document.getElementById('taskFormPanel').style.display = 'block';
-                document.getElementById('taskFormPanel').scrollIntoView({ behavior: 'smooth' });
-            } catch (error) {
-                console.error('加载任务详情失败:', error);
-                showMessage('taskFormResultMessage', '加载任务详情失败', 'error');
-            }
-        }
-
-        // 删除任务
-        async function deleteTask(taskId) {
-            if (!confirm('确定要删除这个任务吗？')) {
+            if (result.status === 401) {
+                showMessage('taskFormResultMessage', '认证失败，请检查 Token', 'error');
                 return;
             }
 
-            try {
-                const response = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-                    method: 'DELETE'
-                });
+            if (!result.ok) {
+                showMessage('taskFormResultMessage', '加载任务列表失败', 'error');
+                return;
+            }
 
-                if (response.ok) {
-                    showMessage('taskFormResultMessage', '✓ 任务已删除', 'success');
-                    loadTasks();
-                } else {
-                    showMessage('taskFormResultMessage', '✗ 删除失败', 'error');
-                }
-            } catch (error) {
-                console.error('删除任务失败:', error);
+            const tasks = result.data;
+            const container = $('tasksList');
+
+            if (tasks.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⏰</div>
+                        <p>暂无定时任务，点击"新建任务"创建第一个定时任务</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => `
+                <div class="task-item">
+                    <div class="task-header">
+                        <div>
+                            <div class="task-title">${task.name}</div>
+                            <span class="task-status ${task.enabled ? 'enabled' : 'disabled'}">
+                                ${task.enabled ? '✓ 已启用' : '✗ 已禁用'}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="task-info">
+                        <div class="task-info-item">
+                            <div class="task-info-label">Cron 表达式</div>
+                            <div class="task-info-value">${task.cron_expression}</div>
+                        </div>
+                        <div class="task-info-item">
+                            <div class="task-info-label">消息类型</div>
+                            <div class="task-info-value">${task.message_type === 'image' ? '📷 图片' : '💬 文本'}</div>
+                        </div>
+                        <div class="task-info-item">
+                            <div class="task-info-label">最后运行</div>
+                            <div class="task-info-value">${task.last_run || '从未运行'}</div>
+                        </div>
+                        <div class="task-info-item">
+                            <div class="task-info-label">${task.message_type === 'image' ? '图片预览' : '消息内容'}</div>
+                            <div class="task-info-value">
+                                ${task.message_type === 'image'
+                                    ? (task.image_base64 ? '<img src="data:image/png;base64,' + task.image_base64 + '" style="max-width: 200px; max-height: 100px; border-radius: 4px;">' : '无图片')
+                                    : task.message}
+                            </div>
+                        </div>
+                        <div class="task-info-item">
+                            <div class="task-info-label">目标群组</div>
+                            <div class="task-info-value">
+                                ${task.target_groups.length > 0 ? task.target_groups.join(', ') : '所有群组'}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="task-actions">
+                        <button class="btn btn-small" onclick="editTask(${task.id})">编辑</button>
+                        <button class="btn btn-small ${task.enabled ? 'btn-secondary' : ''}"
+                                onclick="toggleTask(${task.id}, ${task.enabled})">
+                            ${task.enabled ? '禁用' : '启用'}
+                        </button>
+                        <button class="btn btn-small btn-danger" onclick="deleteTask(${task.id})">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function showTaskForm() {
+            editingTaskId = null;
+            $('taskFormTitle').textContent = '新建定时任务';
+            $('taskFormBtnText').textContent = '创建任务';
+            $('taskForm').reset();
+
+            taskImageBase64 = '';
+            $('taskImagePreview').style.display = 'none';
+            $('taskMessageType').value = 'text';
+            toggleTaskMessageType();
+
+            $('taskFormPanel').style.display = 'block';
+            $('taskFormPanel').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function hideTaskForm() {
+            $('taskFormPanel').style.display = 'none';
+            $('taskForm').reset();
+
+            taskImageBase64 = '';
+            $('taskImagePreview').style.display = 'none';
+
+            editingTaskId = null;
+        }
+
+        async function editTask(taskId) {
+            const result = await apiRequest(`/api/tasks/${taskId}`, { errorMsg: '加载任务详情失败' });
+
+            if (!result.ok) {
+                showMessage('taskFormResultMessage', '加载任务详情失败', 'error');
+                return;
+            }
+
+            const task = result.data;
+            editingTaskId = taskId;
+            $('taskFormTitle').textContent = '编辑定时任务';
+            $('taskFormBtnText').textContent = '保存修改';
+
+            $('taskId').value = task.id;
+            $('taskName').value = task.name;
+            $('cronExpression').value = task.cron_expression;
+            $('taskMessage').value = task.message;
+            $('taskEnabled').value = task.enabled.toString();
+
+            $('taskMessageType').value = task.message_type || 'text';
+            toggleTaskMessageType();
+
+            if (task.message_type === 'image' && task.image_base64) {
+                taskImageBase64 = task.image_base64;
+                $('taskImagePreviewImg').src = 'data:image/png;base64,' + task.image_base64;
+                $('taskImagePreview').style.display = 'block';
+            }
+
+            document.querySelectorAll('input[name="targetGroups"]').forEach(checkbox => {
+                checkbox.checked = task.target_groups.includes(checkbox.value);
+            });
+
+            $('taskFormPanel').style.display = 'block';
+            $('taskFormPanel').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        async function deleteTask(taskId) {
+            if (!confirm('确定要删除这个任务吗？')) return;
+
+            const result = await apiRequest(`/api/tasks/${taskId}`, {
+                method: 'DELETE',
+                errorMsg: '删除任务失败'
+            });
+
+            if (result.ok) {
+                showMessage('taskFormResultMessage', '✓ 任务已删除', 'success');
+                loadTasks();
+            } else {
                 showMessage('taskFormResultMessage', '✗ 删除失败', 'error');
             }
         }
 
-        // 启用/禁用任务
         async function toggleTask(taskId, currentEnabled) {
-            try {
-                const response = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        enabled: !currentEnabled
-                    })
-                });
+            const result = await apiRequest(`/api/tasks/${taskId}`, {
+                method: 'PUT',
+                body: { enabled: !currentEnabled },
+                errorMsg: '切换任务状态失败'
+            });
 
-                if (response.ok) {
-                    loadTasks();
-                } else {
-                    showMessage('taskFormResultMessage', '✗ 操作失败', 'error');
-                }
-            } catch (error) {
-                console.error('切换任务状态失败:', error);
+            if (result.ok) {
+                loadTasks();
+            } else {
                 showMessage('taskFormResultMessage', '✗ 操作失败', 'error');
             }
         }
 
-        // 全局变量存储 base64 图片数据
-        let sendImageBase64 = '';
-        let taskImageBase64 = '';
-
-        // 切换发送消息类型
-        function toggleSendMessageType() {
-            const messageType = document.getElementById('sendMessageType').value;
-            const textGroup = document.getElementById('sendTextGroup');
-            const imageGroup = document.getElementById('sendImageGroup');
-
-            if (messageType === 'image') {
-                textGroup.style.display = 'none';
-                imageGroup.style.display = 'block';
-            } else {
-                textGroup.style.display = 'block';
-                imageGroup.style.display = 'none';
-            }
-        }
-
-        // 切换定时任务消息类型
-        function toggleTaskMessageType() {
-            const messageType = document.getElementById('taskMessageType').value;
-            const textGroup = document.getElementById('taskTextGroup');
-            const imageGroup = document.getElementById('taskImageGroup');
-
-            if (messageType === 'image') {
-                textGroup.style.display = 'none';
-                imageGroup.style.display = 'block';
-            } else {
-                textGroup.style.display = 'block';
-                imageGroup.style.display = 'none';
-            }
-        }
-
-        // 预览发送消息图片
-        function previewSendImage(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                // 保存 base64 数据（去除前缀）
-                sendImageBase64 = e.target.result.split(',')[1];
-
-                // 显示预览
-                document.getElementById('sendImagePreviewImg').src = e.target.result;
-                document.getElementById('sendImagePreview').style.display = 'block';
-            };
-            reader.readAsDataURL(file);
-        }
-
-        // 预览定时任务图片
-        function previewTaskImage(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                // 保存 base64 数据（去除前缀）
-                taskImageBase64 = e.target.result.split(',')[1];
-
-                // 显示预览
-                document.getElementById('taskImagePreviewImg').src = e.target.result;
-                document.getElementById('taskImagePreview').style.display = 'block';
-            };
-            reader.readAsDataURL(file);
-        }
-
-        // 显示提示消息
-        function showMessage(elementId, text, type) {
-            const msgEl = document.getElementById(elementId);
-            msgEl.textContent = text;
-            msgEl.className = `message ${type}`;
-            msgEl.style.display = 'block';
-
-            setTimeout(() => {
-                msgEl.style.display = 'none';
-            }, 5000);
-        }
-
-        // 表单提交 - 发送消息
-        document.getElementById('sendForm').addEventListener('submit', async (e) => {
+        // ==================== 表单提交处理 ====================
+        $('sendForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
-            const groupName = document.getElementById('groupSelect').value;
-            const messageType = document.getElementById('sendMessageType').value;
+            const groupName = $('groupSelect').value;
+            const messageType = $('sendMessageType').value;
 
             if (!groupName) {
                 showMessage('sendResultMessage', '请选择群聊', 'error');
@@ -1043,7 +1126,7 @@
             }
 
             if (messageType === 'text') {
-                const message = document.getElementById('messageText').value.trim();
+                const message = $('messageText').value.trim();
                 if (!message) {
                     showMessage('sendResultMessage', '请输入消息内容', 'error');
                     return;
@@ -1058,12 +1141,11 @@
             }
         });
 
-        // 表单提交 - 创建/编辑任务
-        document.getElementById('taskForm').addEventListener('submit', async (e) => {
+        $('taskForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
-            const btn = document.getElementById('taskFormBtn');
-            const btnText = document.getElementById('taskFormBtnText');
+            const btn = $('taskFormBtn');
+            const btnText = $('taskFormBtnText');
             const originalText = btnText.textContent;
 
             btn.disabled = true;
@@ -1073,66 +1155,50 @@
                 const targetGroups = Array.from(document.querySelectorAll('input[name="targetGroups"]:checked'))
                     .map(cb => cb.value);
 
-                const messageType = document.getElementById('taskMessageType').value;
+                const messageType = $('taskMessageType').value;
 
                 const data = {
-                    name: document.getElementById('taskName').value,
-                    cron_expression: document.getElementById('cronExpression').value,
+                    name: $('taskName').value,
+                    cron_expression: $('cronExpression').value,
                     message_type: messageType,
                     target_groups: targetGroups,
-                    enabled: document.getElementById('taskEnabled').value === 'true'
+                    enabled: $('taskEnabled').value === 'true'
                 };
 
-                // 根据消息类型设置内容
                 if (messageType === 'text') {
-                    data.message = document.getElementById('taskMessage').value;
+                    data.message = $('taskMessage').value;
                     data.image_base64 = '';
                 } else {
                     data.message = '';
                     data.image_base64 = taskImageBase64;
                 }
 
-                const url = editingTaskId ? `${API_BASE}/api/tasks/${editingTaskId}` : `${API_BASE}/api/tasks`;
+                const url = editingTaskId ? `/api/tasks/${editingTaskId}` : '/api/tasks';
                 const method = editingTaskId ? 'PUT' : 'POST';
 
-                const response = await fetch(url, {
-                    method: method,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(data)
-                });
+                const result = await apiRequest(url, { method, body: data, errorMsg: '提交任务失败' });
 
-                const result = await response.json();
-
-                if (response.ok) {
+                if (result.ok) {
                     showMessage('taskFormResultMessage', `✓ ${editingTaskId ? '任务已更新' : '任务已创建'}`, 'success');
                     hideTaskForm();
 
-                    // 清空图片预览
                     taskImageBase64 = '';
-                    document.getElementById('taskImagePreview').style.display = 'none';
+                    $('taskImagePreview').style.display = 'none';
 
-                    // 滚动到任务列表顶部，让用户看到新创建/更新的任务
                     setTimeout(() => {
-                        document.getElementById('tasksList').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        $('tasksList').scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }, 100);
                 } else {
-                    showMessage('taskFormResultMessage', `✗ ${result.detail || '操作失败'}`, 'error');
+                    showMessage('taskFormResultMessage', `✗ ${result.data?.detail || result.error || '操作失败'}`, 'error');
                 }
-            } catch (error) {
-                console.error('提交任务失败:', error);
-                showMessage('taskFormResultMessage', '✗ 网络错误，请重试', 'error');
             } finally {
-                // 无论成功、失败还是异常，都刷新任务列表
                 await loadTasks();
-
                 btn.disabled = false;
                 btnText.textContent = originalText;
             }
         });
 
-        // 页面加载时获取群组列表和服务器信息
+        // ==================== 初始化 ====================
         loadGroups();
         loadServerInfo();
     </script>
