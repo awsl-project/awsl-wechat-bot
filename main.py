@@ -337,11 +337,11 @@ class AWSlBot:
                     is_last = (i == len(messages_to_check) - 1)  # 是否是最后一条
                     if config.DEBUG:
                         ctx = [messages[j][:15]+'...' if len(messages[j])>15 else messages[j] for j in range(max(0, idx-2), idx)]
-                        logger.debug(f"[{group_name}] [{i}] msg={msg[:30]}... ctx={ctx} hash={msg_hash[-8:]} processed={is_processed} is_last={is_last}")
+                        logger.debug(f"[{group_name}] [{i}] msg={msg[:30]}... ctx={ctx} hash={msg_hash[-8:]} processed={is_processed} is_last={is_last} ctx_count={ctx_count}")
                     if not is_processed:
-                        # 只有最后一条消息才触发，或者上下文足够2条的消息才触发
-                        # 否则只标记已处理不触发
-                        if is_last or ctx_count >= 2:
+                        # 只有最后一条消息（最新的）才触发
+                        # 前面的消息即使未处理（哈希因滚动变化），也只标记不触发
+                        if is_last:
                             new_messages.append((msg, msg_hash, True))  # True = 可触发
                         else:
                             new_messages.append((msg, msg_hash, False))  # False = 只标记不触发
@@ -420,7 +420,8 @@ class AWSlBot:
                     if trigger_type == "command" and self.command_service:
                         logger.info(f"[{group_name}] 执行命令: {content[0]}")
                         res = self.command_service.execute_command(content[0], content[1])
-                        self.wechat.send_text_to_window(window, res if res else "执行失败")
+                        if res:
+                            self.wechat.send_text_to_window(window, res)
                     # 刷新命令列表
                     elif trigger_type == "command_refresh":
                         logger.info(f"[{group_name}] 刷新命令列表")
