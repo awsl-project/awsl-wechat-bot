@@ -21,7 +21,7 @@ from config import config
 from src.adapters import get_wechat_adapter
 from src.services.ai import AIService
 from src.services.command import CommandService
-from src.services.http_server import HTTPServer
+from src.services.http import HTTPServer
 
 # 根据配置设置日志级别
 log_level = logging.DEBUG if config.DEBUG else logging.INFO
