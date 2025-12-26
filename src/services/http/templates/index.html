@@ -641,6 +641,7 @@
                         <select id="taskMessageType" onchange="toggleTaskMessageType()">
                             <option value="text">文本消息</option>
                             <option value="image">图片消息</option>
+                            <option value="summary">群聊总结</option>
                         </select>
                     </div>
 
@@ -655,6 +656,35 @@
                         <div id="taskImagePreview" style="margin-top: 10px; display: none;">
                             <img id="taskImagePreviewImg" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
                         </div>
+                    </div>
+
+                    <div class="form-group" id="taskSummaryGroup" style="display: none;">
+                        <div class="cron-help" style="margin-bottom: 15px;">
+                            <div class="cron-help-title">📊 群聊总结配置说明</div>
+                            <p style="font-size: 13px; color: #78350f; margin-bottom: 10px;">
+                                群聊总结会自动解密数据库、获取聊天记录、生成 AI 总结并发送图片到群聊。
+                            </p>
+                            <div style="font-size: 12px; color: #92400e;">
+                                <strong>必填字段：</strong>
+                                <ul style="margin: 5px 0 0 20px;">
+                                    <li><code>input_path</code> - 微信数据目录路径</li>
+                                    <li><code>key</code> - 解密密钥</li>
+                                    <li><code>output_path</code> - 解密输出目录</li>
+                                    <li><code>api_base</code> - API 基础地址</li>
+                                    <li><code>groups</code> - 群聊列表，每项包含 group_id 和 group_name</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <label for="taskSummaryConfig">总结配置 (JSON)</label>
+                        <textarea id="taskSummaryConfig" style="min-height: 200px; font-family: 'Courier New', monospace;" placeholder='{
+  "input_path": "C:\\Users\\xxx\\Documents\\xwechat_files\\wxid_xxx",
+  "key": "解密密钥",
+  "output_path": "C:\\decrypted",
+  "api_base": "http://localhost:8000",
+  "groups": [
+    {"group_id": "xxx@chatroom", "group_name": "群聊名称"}
+  ]
+}'></textarea>
                     </div>
 
                     <div class="form-group">
@@ -802,7 +832,10 @@
         }
 
         function toggleTaskMessageType() {
-            toggleMessageType('taskMessageType', 'taskTextGroup', 'taskImageGroup');
+            const messageType = $('taskMessageType').value;
+            $('taskTextGroup').style.display = messageType === 'text' ? 'block' : 'none';
+            $('taskImageGroup').style.display = messageType === 'image' ? 'block' : 'none';
+            $('taskSummaryGroup').style.display = messageType === 'summary' ? 'block' : 'none';
         }
 
         // ==================== 图片预览 ====================
@@ -972,7 +1005,30 @@
                 return;
             }
 
-            container.innerHTML = tasks.map(task => `
+            container.innerHTML = tasks.map(task => {
+                let messageTypeDisplay = '💬 文本';
+                let messageContent = task.message;
+
+                if (task.message_type === 'image') {
+                    messageTypeDisplay = '📷 图片';
+                    messageContent = task.image_base64
+                        ? '<img src="data:image/png;base64,' + task.image_base64 + '" style="max-width: 200px; max-height: 100px; border-radius: 4px;">'
+                        : '无图片';
+                } else if (task.message_type === 'summary') {
+                    messageTypeDisplay = '📊 群聊总结';
+                    try {
+                        const config = JSON.parse(task.message);
+                        const groupNames = config.groups ? config.groups.map(g => g.group_name).join(', ') : '未配置';
+                        messageContent = `<div style="font-size: 12px;">
+                            <div><strong>目标群聊:</strong> ${groupNames}</div>
+                            <div><strong>API:</strong> ${config.api_base || '未配置'}</div>
+                        </div>`;
+                    } catch (e) {
+                        messageContent = '<span style="color: #ef4444;">配置解析失败</span>';
+                    }
+                }
+
+                return `
                 <div class="task-item">
                     <div class="task-header">
                         <div>
@@ -989,26 +1045,24 @@
                         </div>
                         <div class="task-info-item">
                             <div class="task-info-label">消息类型</div>
-                            <div class="task-info-value">${task.message_type === 'image' ? '📷 图片' : '💬 文本'}</div>
+                            <div class="task-info-value">${messageTypeDisplay}</div>
                         </div>
                         <div class="task-info-item">
                             <div class="task-info-label">最后运行</div>
                             <div class="task-info-value">${task.last_run || '从未运行'}</div>
                         </div>
                         <div class="task-info-item">
-                            <div class="task-info-label">${task.message_type === 'image' ? '图片预览' : '消息内容'}</div>
-                            <div class="task-info-value">
-                                ${task.message_type === 'image'
-                                    ? (task.image_base64 ? '<img src="data:image/png;base64,' + task.image_base64 + '" style="max-width: 200px; max-height: 100px; border-radius: 4px;">' : '无图片')
-                                    : task.message}
-                            </div>
+                            <div class="task-info-label">${task.message_type === 'summary' ? '总结配置' : (task.message_type === 'image' ? '图片预览' : '消息内容')}</div>
+                            <div class="task-info-value">${messageContent}</div>
                         </div>
+                        ${task.message_type !== 'summary' ? `
                         <div class="task-info-item">
                             <div class="task-info-label">目标群组</div>
                             <div class="task-info-value">
                                 ${task.target_groups.length > 0 ? task.target_groups.join(', ') : '所有群组'}
                             </div>
                         </div>
+                        ` : ''}
                     </div>
                     <div class="task-actions">
                         <button class="btn btn-small" onclick="editTask(${task.id})">编辑</button>
@@ -1019,7 +1073,7 @@
                         <button class="btn btn-small btn-danger" onclick="deleteTask(${task.id})">删除</button>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function showTaskForm() {
@@ -1031,6 +1085,7 @@
             taskImageBase64 = '';
             $('taskImagePreview').style.display = 'none';
             $('taskMessageType').value = 'text';
+            $('taskSummaryConfig').value = '';
             toggleTaskMessageType();
 
             $('taskFormPanel').style.display = 'block';
@@ -1043,6 +1098,7 @@
 
             taskImageBase64 = '';
             $('taskImagePreview').style.display = 'none';
+            $('taskSummaryConfig').value = '';
 
             editingTaskId = null;
         }
@@ -1063,11 +1119,19 @@
             $('taskId').value = task.id;
             $('taskName').value = task.name;
             $('cronExpression').value = task.cron_expression;
-            $('taskMessage').value = task.message;
             $('taskEnabled').value = task.enabled.toString();
 
             $('taskMessageType').value = task.message_type || 'text';
             toggleTaskMessageType();
+
+            // 根据类型填充内容
+            if (task.message_type === 'summary') {
+                $('taskSummaryConfig').value = task.message;
+                $('taskMessage').value = '';
+            } else {
+                $('taskMessage').value = task.message;
+                $('taskSummaryConfig').value = '';
+            }
 
             if (task.message_type === 'image' && task.image_base64) {
                 taskImageBase64 = task.image_base64;
@@ -1168,9 +1232,36 @@
                 if (messageType === 'text') {
                     data.message = $('taskMessage').value;
                     data.image_base64 = '';
-                } else {
+                } else if (messageType === 'image') {
                     data.message = '';
                     data.image_base64 = taskImageBase64;
+                } else if (messageType === 'summary') {
+                    // 验证 JSON 格式
+                    const configText = $('taskSummaryConfig').value.trim();
+                    if (!configText) {
+                        showMessage('taskFormResultMessage', '请输入总结配置', 'error');
+                        btn.disabled = false;
+                        btnText.textContent = originalText;
+                        return;
+                    }
+                    try {
+                        const config = JSON.parse(configText);
+                        // 验证必填字段
+                        if (!config.input_path || !config.key || !config.output_path || !config.api_base || !config.groups) {
+                            showMessage('taskFormResultMessage', '配置缺少必填字段 (input_path, key, output_path, api_base, groups)', 'error');
+                            btn.disabled = false;
+                            btnText.textContent = originalText;
+                            return;
+                        }
+                        data.message = configText;
+                    } catch (e) {
+                        showMessage('taskFormResultMessage', 'JSON 格式错误: ' + e.message, 'error');
+                        btn.disabled = false;
+                        btnText.textContent = originalText;
+                        return;
+                    }
+                    data.image_base64 = '';
+                    data.target_groups = [];  // summary 类型不使用 target_groups
                 }
 
                 const url = editingTaskId ? `/api/tasks/${editingTaskId}` : '/api/tasks';

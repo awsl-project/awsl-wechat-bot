@@ -15,3 +15,8 @@ croniter>=2.0.0
 # 微信聊天记录工具依赖 (可选)
 pycryptodome>=3.19.0
 zstandard>=0.22.0
+
+# 群聊总结工具依赖
+html2image>=2.0.0
+Pillow>=9.0.0
+markdown>=3.4.0

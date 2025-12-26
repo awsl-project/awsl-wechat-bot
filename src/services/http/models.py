@@ -108,3 +108,24 @@ class ChatlogMessageResponse(BaseModel):
     msg_type: int
     content: str
     is_self: bool
+
+
+class ChatSummaryGroup(BaseModel):
+    """群聊总结群组配置"""
+    group_id: str
+    group_name: str
+
+
+class ChatSummaryRequest(BaseModel):
+    """发送群聊总结请求"""
+    input_path: str
+    key: str
+    output_path: str
+    api_base: str
+    groups: List[ChatSummaryGroup]
+
+
+class ChatSummaryResponse(BaseModel):
+    """发送群聊总结响应"""
+    success: bool
+    message: str

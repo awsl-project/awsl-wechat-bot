@@ -10,8 +10,12 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
 
 from ..auth import verify_token
-from ..models import ChatlogDecryptRequest, ChatlogGroupResponse, ChatlogMessageResponse
+from ..models import (
+    ChatlogDecryptRequest, ChatlogGroupResponse, ChatlogMessageResponse,
+    ChatSummaryRequest, ChatSummaryResponse
+)
 from src.utils.wechat_chatlog import WeChatDBDecryptor, WeChatDBReader, HAS_CRYPTO
+from src.utils.summary_service import start_chat_summary_async, SummaryConfig, SummaryGroup, SummaryResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chatlog", tags=["chatlog"])
@@ -129,5 +133,45 @@ def create_routes():
             raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
         finally:
             reader.close()
+
+    @router.post("/summary", response_model=ChatSummaryResponse, dependencies=[Depends(verify_token)])
+    async def send_chat_summary(request: ChatSummaryRequest):
+        """
+        发送群聊总结
+
+        异步启动解密和总结任务。同一时间只允许一个总结任务运行。
+        """
+        # 构建配置
+        config = SummaryConfig(
+            input_path=request.input_path,
+            key=request.key,
+            output_path=request.output_path,
+            api_base=request.api_base,
+            groups=[SummaryGroup(group_id=g.group_id, group_name=g.group_name) for g in request.groups]
+        )
+
+        group_names = [g.group_name for g in request.groups]
+
+        # 完成回调
+        def on_complete(result: SummaryResult):
+            if result.success:
+                logger.info(f"[HTTP API] 群聊总结任务完成: {result.message}")
+            else:
+                logger.error(f"[HTTP API] 群聊总结任务失败: {result.message}")
+
+        # 异步启动任务（内部已处理锁和线程）
+        result = start_chat_summary_async(config, on_complete)
+
+        if not result.success:
+            return ChatSummaryResponse(
+                success=False,
+                message=result.message
+            )
+
+        logger.info(f"[HTTP API] 已启动群聊总结任务: {group_names}")
+        return ChatSummaryResponse(
+            success=True,
+            message=f"已启动群聊总结任务，目标群聊: {', '.join(group_names)}"
+        )
 
     return router
