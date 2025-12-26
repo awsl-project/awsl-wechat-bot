@@ -358,6 +358,7 @@ def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, 
         return False
 
     from string import Template
+    import shutil
 
     # 将 markdown 转为 HTML
     html_content = markdown_to_html(summary)
@@ -379,7 +380,28 @@ def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, 
     )
 
     try:
-        hti = Html2Image(size=(900, render_height))
+        # 检测可用的浏览器
+        browser_path = None
+
+        # Windows Edge 路径
+        edge_paths = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+
+        # 优先使用 Chrome，如果没有则使用 Edge
+        if not shutil.which("chrome") and not shutil.which("google-chrome"):
+            for edge_path in edge_paths:
+                if os.path.exists(edge_path):
+                    browser_path = edge_path
+                    print(f"使用 Edge 浏览器: {edge_path}")
+                    break
+
+        if browser_path:
+            hti = Html2Image(size=(900, render_height), browser_executable=browser_path)
+        else:
+            hti = Html2Image(size=(900, render_height))
+
         output_dir = os.path.dirname(output_path) or '.'
         output_name = os.path.basename(output_path)
         if not output_name.endswith('.png'):
