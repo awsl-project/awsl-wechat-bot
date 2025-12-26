@@ -25,7 +25,7 @@
 import argparse
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
@@ -214,19 +214,36 @@ def summarize_with_llm(
     model: str = "gpt-4o-mini"
 ) -> str:
     """使用 LLM 生成聊天记录总结"""
-    system_prompt = """你是一个专业的群聊记录分析助手。请根据提供的聊天记录，生成一份结构化的 Markdown 格式总结。
+    system_prompt = """你是一个专业的群聊记录分析助手。请分析提供的聊天记录，生成结构化的 Markdown 格式总结。
 
 总结应包含以下部分：
-1. **概览** - 简要描述今日群聊的整体氛围和活跃度
-2. **主要话题** - 列出讨论的主要话题，每个话题用小标题
-3. **重要信息** - 提取值得关注的信息、决定或结论
-4. **待办/跟进** - 如有提到需要跟进的事项，列出来
+
+## 概览
+简要描述今日群聊的整体氛围和活跃度（1-2句话）
+
+## 话题分析
+识别出所有讨论话题，对于每个话题提供：
+- **主题** - 话题的简短标题
+- **时间**: 起止时间（如 09:30-10:15）
+- **参与者**: 主要参与讨论的成员
+- **内容**: 详细描述讨论过程，包括各方观点、提出的问题、给出的解答或建议、达成的共识等（3-5句话）
+
+格式示例：
+### 话题一：[主题名称]
+- **时间**: 09:30 - 10:15
+- **参与者**: 张三、李四、王五
+- **内容**: 张三提出了xxx问题，李四建议使用xxx方案，王五补充了xxx细节。经过讨论，大家认为xxx是最佳选择，并计划xxx。
+
+## 重要信息
+提取值得关注的信息、决定或结论（如无则写"无"）
 
 注意：
 - 使用中文输出
-- 保持客观，不添加主观评价
-- 如果聊天内容较少或无实质内容，如实说明
+- 话题按时间顺序排列
+- 合并相似或连续的讨论
+- 内容描述要具体，体现讨论的来龙去脉
 - 忽略表情包、无意义的水群内容
+- 如果聊天内容较少或无实质内容，如实说明
 - 不要生成活跃成员/发言排行相关内容，这部分由程序自动统计"""
 
     user_prompt = f"""请总结以下群聊记录：
@@ -477,8 +494,9 @@ def cmd_summary(args) -> int:
         target_date = datetime.now()
 
     date_str = target_date.strftime("%Y-%m-%d")
-    start_time = f"{date_str} 00:00:00"
-    end_time = f"{date_str} 23:59:59"
+    next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    start_time = f"{date_str} 05:00:00"
+    end_time = f"{next_date_str} 05:00:00"
 
     if not args.db_path:
         print("错误: 请提供 --db-path 参数")
