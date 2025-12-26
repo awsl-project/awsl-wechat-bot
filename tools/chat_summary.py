@@ -397,24 +397,45 @@ def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, 
                     print(f"使用 Edge 浏览器: {edge_path}")
                     break
 
-        if browser_path:
-            hti = Html2Image(size=(900, render_height), browser_executable=browser_path)
-        else:
-            hti = Html2Image(size=(900, render_height))
+        # 确保输出目录是绝对路径且存在
+        output_dir = os.path.dirname(output_path)
+        if not output_dir:
+            output_dir = os.getcwd()
+        output_dir = os.path.abspath(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
-        output_dir = os.path.dirname(output_path) or '.'
         output_name = os.path.basename(output_path)
         if not output_name.endswith('.png'):
             output_name += '.png'
 
-        hti.output_path = output_dir
-        temp_name = f"_temp_{output_name}"
-        hti.screenshot(html_str=full_html, save_as=temp_name)
+        if browser_path:
+            hti = Html2Image(size=(900, render_height), browser_executable=browser_path, output_path=output_dir)
+        else:
+            hti = Html2Image(size=(900, render_height), output_path=output_dir)
 
-        # 裁剪空白部分
+        temp_name = f"_temp_{output_name}"
         temp_path = os.path.join(output_dir, temp_name)
         final_path = os.path.join(output_dir, output_name)
 
+        # 删除可能存在的旧临时文件
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        # 渲染截图
+        hti.screenshot(html_str=full_html, save_as=temp_name)
+
+        # 等待文件生成
+        import time
+        for _ in range(10):
+            if os.path.exists(temp_path):
+                break
+            time.sleep(0.5)
+
+        if not os.path.exists(temp_path):
+            print(f"渲染图片失败: 临时文件未生成 {temp_path}")
+            return False
+
+        # 裁剪空白部分
         img = Image.open(temp_path)
         pixels = img.load()
         width, height = img.size
