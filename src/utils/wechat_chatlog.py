@@ -76,6 +76,11 @@ class ChatRoom:
     owner: str
     remark: str = ""
     nick_name: str = ""
+    user_display_names: dict = None  # username -> display_name 映射
+
+    def __post_init__(self):
+        if self.user_display_names is None:
+            self.user_display_names = {}
 
     def display_name(self) -> str:
         return self.remark or self.nick_name or self.username
@@ -225,6 +230,109 @@ class WeChatDBDecryptor:
 
 
 # ============================================================
+# Protobuf 解析 (RoomData)
+# ============================================================
+
+def _parse_varint(data: bytes, pos: int) -> tuple[int, int]:
+    """解析 varint，返回 (值, 新位置)"""
+    result = 0
+    shift = 0
+    while pos < len(data):
+        b = data[pos]
+        result |= (b & 0x7f) << shift
+        pos += 1
+        if (b & 0x80) == 0:
+            break
+        shift += 7
+    return result, pos
+
+
+def _parse_room_data(ext_buffer: bytes) -> dict[str, str]:
+    """
+    解析 chat_room.ext_buffer 中的 protobuf 数据，提取群成员昵称
+
+    Returns:
+        dict: username -> display_name 映射
+    """
+    if not ext_buffer or len(ext_buffer) < 2:
+        return {}
+
+    user_display_names = {}
+    pos = 0
+
+    try:
+        while pos < len(ext_buffer):
+            if pos >= len(ext_buffer):
+                break
+
+            # 读取 field tag
+            tag, pos = _parse_varint(ext_buffer, pos)
+            field_number = tag >> 3
+            wire_type = tag & 0x07
+
+            if wire_type == 0:  # varint
+                _, pos = _parse_varint(ext_buffer, pos)
+            elif wire_type == 2:  # length-delimited
+                length, pos = _parse_varint(ext_buffer, pos)
+                if pos + length > len(ext_buffer):
+                    break
+
+                if field_number == 1:  # users 字段
+                    user_data = ext_buffer[pos:pos + length]
+                    user_info = _parse_room_data_user(user_data)
+                    if user_info and user_info[0] and user_info[1]:
+                        user_display_names[user_info[0]] = user_info[1]
+
+                pos += length
+            else:
+                break
+    except Exception:
+        pass
+
+    return user_display_names
+
+
+def _parse_room_data_user(data: bytes) -> tuple[str, str]:
+    """
+    解析 RoomDataUser protobuf
+
+    Returns:
+        tuple: (username, display_name)
+    """
+    username = ""
+    display_name = ""
+    pos = 0
+
+    try:
+        while pos < len(data):
+            tag, pos = _parse_varint(data, pos)
+            field_number = tag >> 3
+            wire_type = tag & 0x07
+
+            if wire_type == 0:  # varint
+                _, pos = _parse_varint(data, pos)
+            elif wire_type == 2:  # length-delimited (string)
+                length, pos = _parse_varint(data, pos)
+                if pos + length > len(data):
+                    break
+
+                value = data[pos:pos + length].decode('utf-8', errors='ignore')
+
+                if field_number == 1:  # userName
+                    username = value
+                elif field_number == 2:  # displayName
+                    display_name = value
+
+                pos += length
+            else:
+                break
+    except Exception:
+        pass
+
+    return username, display_name
+
+
+# ============================================================
 # 读取器
 # ============================================================
 
@@ -236,6 +344,7 @@ class WeChatDBReader:
         self._contact_db: Optional[sqlite3.Connection] = None
         self._message_dbs: dict[str, sqlite3.Connection] = {}
         self._message_db_times: list[tuple[str, int, int]] = []
+        self._chatroom_display_names: dict[str, dict[str, str]] = {}  # chatroom -> {username -> display_name}
 
     def _find_db_files(self, pattern: str) -> list[str]:
         files = []
@@ -324,6 +433,25 @@ class WeChatDBReader:
             return row[1] or row[0] or row[2] or username
         return username
 
+    def _get_chatroom_display_names(self, chatroom: str) -> dict[str, str]:
+        """获取群成员的群昵称映射"""
+        if chatroom in self._chatroom_display_names:
+            return self._chatroom_display_names[chatroom]
+
+        display_names = {}
+        try:
+            db = self._get_contact_db()
+            cursor = db.cursor()
+            cursor.execute("SELECT ext_buffer FROM chat_room WHERE username = ?", (chatroom,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                display_names = _parse_room_data(row[0])
+        except Exception:
+            pass
+
+        self._chatroom_display_names[chatroom] = display_names
+        return display_names
+
     def get_messages(
         self,
         talker: str,
@@ -345,6 +473,9 @@ class WeChatDBReader:
         table_name = self._talker_to_table_name(talker)
         is_chatroom = talker.endswith("@chatroom")
         messages = []
+
+        # 获取群昵称映射
+        display_names = self._get_chatroom_display_names(talker) if is_chatroom else {}
 
         for db_path in db_paths:
             db = self._get_message_db(db_path)
@@ -377,7 +508,8 @@ class WeChatDBReader:
                         sender, content = parts
 
                 is_self = status == 2 or (not is_chatroom and talker != sender)
-                sender_name = self.get_contact_name(sender) if sender else ""
+                # 优先使用群昵称，其次使用联系人名称
+                sender_name = display_names.get(sender) or self.get_contact_name(sender) if sender else ""
 
                 messages.append(Message(
                     seq=sort_seq,
