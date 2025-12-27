@@ -205,6 +205,7 @@ class SummaryService:
                     message=f"无效的日期格式: {config.date}"
                 )
             date_str = target_date.strftime("%Y-%m-%d")
+            file_date_str = date_str  # 用于文件名
             next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
             start_time = f"{date_str} 05:00:00"
             end_time = f"{next_date_str} 05:00:00"
@@ -213,6 +214,7 @@ class SummaryService:
             now = datetime.now()
             start_datetime = now - timedelta(hours=24)
             date_str = f"{start_datetime.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
+            file_date_str = now.strftime("%Y-%m-%d_%H%M")  # 用于文件名
             start_time = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
             end_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -294,7 +296,7 @@ class SummaryService:
                 # 渲染图片（使用绝对路径）
                 output_dir = os.path.abspath(config.output_path)
                 os.makedirs(output_dir, exist_ok=True)
-                output_image = os.path.join(output_dir, f"summary_{group.group_id}_{date_str}.png")
+                output_image = os.path.join(output_dir, f"summary_{group.group_id}_{file_date_str}.png")
                 logger.info(f"[Summary] 渲染图片: {output_image}")
 
                 if not render_to_image(summary, date_str, valid_count, gen_time, output_image):
