@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 
+from config import config
 from ..auth import verify_token
 from ..models import (
     ChatlogDecryptRequest, ChatlogGroupResponse, ChatlogMessageResponse,
@@ -142,12 +143,13 @@ def create_routes():
         异步启动解密和总结任务。同一时间只允许一个总结任务运行。
         """
         # 构建配置
-        config = SummaryConfig(
+        summary_config = SummaryConfig(
             input_path=request.input_path,
             key=request.key,
             output_path=request.output_path,
             api_base=request.api_base,
-            groups=[SummaryGroup(group_id=g.group_id, group_name=g.group_name) for g in request.groups]
+            groups=[SummaryGroup(group_id=g.group_id, group_name=g.group_name) for g in request.groups],
+            token=config.HTTP_API_TOKEN or None
         )
 
         group_names = [g.group_name for g in request.groups]
@@ -160,7 +162,7 @@ def create_routes():
                 logger.error(f"[HTTP API] 群聊总结任务失败: {result.message}")
 
         # 异步启动任务（内部已处理锁和线程）
-        result = start_chat_summary_async(config, on_complete)
+        result = start_chat_summary_async(summary_config, on_complete)
 
         if not result.success:
             return ChatSummaryResponse(

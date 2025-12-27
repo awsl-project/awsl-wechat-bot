@@ -511,9 +511,6 @@ def send_image_to_group(
 
 def cmd_decrypt(args) -> int:
     """解密子命令"""
-    # 从 args 或 config 获取 token
-    token = args.token or config.HTTP_API_TOKEN or None
-
     print(f"输入路径: {args.input}")
     print(f"输出路径: {args.output}")
     print(f"API: {args.api_base}")
@@ -526,7 +523,7 @@ def cmd_decrypt(args) -> int:
             input_path=args.input,
             key=args.key,
             output_path=args.output,
-            token=token
+            token=args.token
         )
         print(f"解密完成: {result}")
         return 0
@@ -537,9 +534,6 @@ def cmd_decrypt(args) -> int:
 
 def cmd_summary(args) -> int:
     """总结子命令"""
-    # 从 args 或 config 获取 token
-    token = args.token or config.HTTP_API_TOKEN or None
-
     # 确定日期范围
     if args.date:
         # 指定日期：使用该日期的 05:00 到次日 05:00
@@ -586,7 +580,7 @@ def cmd_summary(args) -> int:
             start=start_time,
             end=end_time,
             limit=args.limit,
-            token=token
+            token=args.token
         )
     except requests.exceptions.RequestException as e:
         print(f"错误: 获取聊天记录失败: {e}")
@@ -647,7 +641,7 @@ def cmd_summary(args) -> int:
                 api_base=args.api_base,
                 group_name=args.send,
                 image_path=output_path,
-                token=token
+                token=args.token
             )
             print("图片发送成功!")
         except requests.exceptions.RequestException as e:
