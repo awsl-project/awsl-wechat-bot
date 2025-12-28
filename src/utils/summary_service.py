@@ -210,9 +210,13 @@ class SummaryService:
             start_time = f"{date_str} 05:00:00"
             end_time = f"{next_date_str} 05:00:00"
         else:
-            # 未指定日期：使用过去 24 小时
+            # 未指定日期：从最近的凌晨5点到当前时间
             now = datetime.now()
-            start_datetime = now - timedelta(hours=24)
+            today_5am = now.replace(hour=5, minute=0, second=0, microsecond=0)
+            if now >= today_5am:
+                start_datetime = today_5am
+            else:
+                start_datetime = today_5am - timedelta(days=1)
             date_str = f"{start_datetime.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
             file_date_str = now.strftime("%Y-%m-%d_%H%M")  # 用于文件名
             start_time = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
