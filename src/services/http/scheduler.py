@@ -107,6 +107,7 @@ class TaskScheduler:
 
     def _execute_summary_task(self, task):
         """执行群聊总结任务"""
+        from config import config as app_config
         from src.utils.summary_service import start_chat_summary_async, SummaryConfig, SummaryGroup
 
         try:
@@ -115,12 +116,13 @@ class TaskScheduler:
             request = ChatSummaryRequest(**config_dict)
 
             # 构建配置
-            config = SummaryConfig(
+            summary_config = SummaryConfig(
                 input_path=request.input_path,
                 key=request.key,
                 output_path=request.output_path,
                 api_base=request.api_base,
-                groups=[SummaryGroup(group_id=g.group_id, group_name=g.group_name) for g in request.groups]
+                groups=[SummaryGroup(group_id=g.group_id, group_name=g.group_name) for g in request.groups],
+                token=app_config.HTTP_API_TOKEN or None
             )
 
             group_names = [g.group_name for g in request.groups]
@@ -136,7 +138,7 @@ class TaskScheduler:
                     self.executing_tasks.discard(task.id)
 
             # 异步启动任务
-            result = start_chat_summary_async(config, on_complete)
+            result = start_chat_summary_async(summary_config, on_complete)
 
             if result.success:
                 logger.info(f"[Scheduler] 开始执行群聊总结任务: {group_names}")
