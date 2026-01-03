@@ -222,11 +222,25 @@ class SummaryService:
             start_time = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
             end_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 3. 为每个群生成总结
+        # 3. 读取群名称
+        name_reader = None
+        try:
+            from src.utils.wechat_chatlog import WeChatDBReader
+            name_reader = WeChatDBReader(config.output_path)
+        except Exception:
+            name_reader = None
+
+        # 4. 为每个群生成总结
         success_count = 0
         fail_count = 0
 
         for group in config.groups:
+            display_group_name = group.group_name
+            if name_reader:
+                try:
+                    display_group_name = name_reader.get_group_display_name(group.group_id)
+                except Exception:
+                    display_group_name = group.group_name
             group_result = {
                 "success": False,
                 "message": "",
@@ -234,7 +248,7 @@ class SummaryService:
             }
 
             try:
-                logger.info(f"[Summary] 处理群聊: {group.group_name} ({group.group_id})")
+                logger.info(f"[Summary] 处理群聊: {display_group_name} ({group.group_id})")
 
                 # 获取聊天记录
                 messages = fetch_messages(
@@ -270,7 +284,7 @@ class SummaryService:
                 try:
                     summary = summarize_with_llm(
                         messages_text=messages_text,
-                        group_name=group.group_name,
+                        group_name=display_group_name,
                         date_str=date_str,
                         api_url=app_config.OPENAI_BASE_URL,
                         api_key=app_config.OPENAI_API_KEY,
@@ -303,7 +317,7 @@ class SummaryService:
                 output_image = os.path.join(output_dir, f"summary_{group.group_id}_{file_date_str}.png")
                 logger.info(f"[Summary] 渲染图片: {output_image}")
 
-                if not render_to_image(summary, date_str, valid_count, gen_time, output_image):
+                if not render_to_image(summary, date_str, valid_count, gen_time, output_image, display_group_name):
                     group_result["message"] = "图片渲染失败"
                     results["groups"][group.group_id] = group_result
                     fail_count += 1
@@ -332,15 +346,20 @@ class SummaryService:
                 group_result["message"] = "成功"
                 results["groups"][group.group_id] = group_result
                 success_count += 1
-                logger.info(f"[Summary] 群聊 {group.group_name} 总结完成")
+                logger.info(f"[Summary] 群聊 {display_group_name} 总结完成")
 
             except Exception as e:
-                logger.exception(f"[Summary] 处理群聊 {group.group_name} 失败")
+                logger.exception(f"[Summary] 处理群聊 {display_group_name} 失败")
                 group_result["message"] = str(e)
                 results["groups"][group.group_id] = group_result
                 fail_count += 1
 
         # 汇总结果
+        if name_reader:
+            try:
+                name_reader.close()
+            except Exception:
+                pass
         total = len(config.groups)
         if fail_count == 0:
             return SummaryResult(

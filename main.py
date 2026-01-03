@@ -7,7 +7,6 @@ AWSL 微信机器人 - 支持多平台、多群监听
 import os
 import sys
 import time
-import datetime
 import logging
 import subprocess
 import tempfile
@@ -58,7 +57,6 @@ class AWSlBot:
         self.running = False
         self.detector_threads = []  # 每个群一个检测线程
         self.processor_thread = None
-        self.scheduler_thread = None
         self.http_thread = None  # HTTP API 服务线程
 
         self._init_db()
@@ -215,84 +213,6 @@ class AWSlBot:
     def mark_triggered(self, group_name: str):
         """标记指定群已触发"""
         self.last_trigger_time[group_name] = time.time()
-
-    def scheduler_loop(self):
-        """定时任务调度循环（广播到所有群）"""
-        logger.info("定时任务调度线程启动")
-        tasks = config.SCHEDULED_TASKS
-        if not tasks:
-            while self.running:
-                time.sleep(60)
-            return
-        task_states = {}
-        for i, task in enumerate(tasks):
-            if task.get('type') == 'interval':
-                task_states[i] = time.time()
-            else:
-                task_states[i] = ""
-        while self.running:
-            try:
-                now = time.time()
-                current_dt = datetime.datetime.now()
-                current_time_str = current_dt.strftime("%H:%M")
-                current_date_str = current_dt.strftime("%Y-%m-%d")
-                for i, task in enumerate(tasks):
-                    task_type = task.get('type')
-                    content = task.get('content')
-                    command_name = task.get('command')
-                    if not content and not command_name:
-                        continue
-                    should_trigger = False
-                    if task_type == 'interval':
-                        if now - task_states.get(i, 0) >= task.get('seconds', 3600):
-                            should_trigger = True
-                            task_states[i] = now
-                    elif task_type == 'daily':
-                        if current_time_str == task.get('time') and task_states.get(i, "") != current_date_str:
-                            should_trigger = True
-                            task_states[i] = current_date_str
-
-                    if should_trigger:
-                        self._broadcast_task(task, now, i)
-
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"调度线程出错: {e}")
-                time.sleep(5)
-
-    def _broadcast_task(self, task, now, task_index):
-        """将定时任务广播到所有群"""
-        content = task.get('content')
-        command_name = task.get('command')
-
-        # 遍历所有活跃的群
-        for group in self.groups:
-            # 检查窗口是否仍然存在
-            if not group["window"].Exists(0.5):
-                logger.debug(f"群 [{group['name']}] 窗口已关闭，跳过定时任务")
-                continue
-
-            try:
-                if command_name:
-                    logger.info(f"⏰ 触发定时命令[{task_index}] 到 [{group['name']}]: {command_name}")
-                    self.message_queue.put_nowait({
-                        'type': 'command',
-                        'group_name': group['name'],
-                        'window': group['window'],
-                        'content': (command_name, task.get('params', '')),
-                        'timestamp': now
-                    })
-                else:
-                    logger.info(f"⏰ 触发定时消息[{task_index}] 到 [{group['name']}]: {content}")
-                    self.message_queue.put_nowait({
-                        'type': 'text',
-                        'group_name': group['name'],
-                        'window': group['window'],
-                        'content': content,
-                        'timestamp': now
-                    })
-            except queue.Full:
-                logger.warning(f"⚠ 队列已满，跳过群 [{group['name']}] 的任务")
 
     def message_detector_loop(self, group_name: str, window):
         """单个群的消息检测循环"""
@@ -501,27 +421,21 @@ class AWSlBot:
         self.processor_thread.start()
         logger.info("已启动处理线程")
 
-        # 启动调度线程
-        self.scheduler_thread = threading.Thread(target=self.scheduler_loop, daemon=True)
-        self.scheduler_thread.start()
-        logger.info("已启动调度线程")
-
-        # 启动 HTTP API 服务（如果启用）
-        if config.HTTP_API_ENABLED:
-            try:
-                http_server = HTTPServer(self)
-                self.http_thread = threading.Thread(
-                    target=http_server.run,
-                    args=(config.HTTP_API_HOST, config.HTTP_API_PORT),
-                    daemon=True
-                )
-                self.http_thread.start()
-                logger.info(f"已启动 HTTP API 服务: http://{config.HTTP_API_HOST}:{config.HTTP_API_PORT}")
-                print(f"✓ HTTP API: http://{config.HTTP_API_HOST}:{config.HTTP_API_PORT}")
-                print(f"  - GET  /api/groups   - 列出所有聊天窗口")
-                print(f"  - POST /api/send     - 发送消息到指定窗口")
-            except Exception as e:
-                logger.error(f"启动 HTTP API 服务失败: {e}")
+        # 启动 HTTP API 服务
+        try:
+            http_server = HTTPServer(self)
+            self.http_thread = threading.Thread(
+                target=http_server.run,
+                args=(config.HTTP_API_HOST, config.HTTP_API_PORT),
+                daemon=True
+            )
+            self.http_thread.start()
+            logger.info(f"已启动 HTTP API 服务: http://{config.HTTP_API_HOST}:{config.HTTP_API_PORT}")
+            print(f"✓ HTTP API: http://{config.HTTP_API_HOST}:{config.HTTP_API_PORT}")
+            print(f"  - GET  /api/groups   - 列出所有聊天窗口")
+            print(f"  - POST /api/send     - 发送消息到指定窗口")
+        except Exception as e:
+            logger.error(f"启动 HTTP API 服务失败: {e}")
 
         print(f"\n✓ 正在监听 {len(self.groups)} 个群...")
         print("按 Ctrl+C 停止监听\n")

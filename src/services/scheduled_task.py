@@ -6,6 +6,7 @@
 import logging
 import sqlite3
 import threading
+import time
 from datetime import datetime
 from typing import Optional, List, Dict
 from croniter import croniter
@@ -62,6 +63,8 @@ class ScheduledTask:
 class ScheduledTaskService:
     """定时任务服务"""
 
+    _CACHE_TTL_SECONDS = 120
+
     def __init__(self, db_path: str):
         """
         初始化定时任务服务
@@ -78,6 +81,10 @@ class ScheduledTaskService:
         self.conn.execute('PRAGMA busy_timeout=5000')
 
         self.db_lock = threading.Lock()
+        self._run_cache_lock = threading.Lock()
+        # 缓存每个任务最近一次“计划触发时间”(本地时间)，防止重复触发
+        # value: (prev_run_local, cached_at_ts)
+        self._last_scheduled_run: Dict[int, tuple[datetime, float]] = {}
         self._init_db()
 
     def _init_db(self):
@@ -304,6 +311,9 @@ class ScheduledTaskService:
                 query = f"UPDATE scheduled_tasks SET {', '.join(updates)} WHERE id = ?"
                 self.conn.execute(query, params)
                 self.conn.commit()
+                # 任务配置变更后，清理内存缓存，避免误判重复
+                if cron_expression is not None or enabled is not None:
+                    self._clear_cached_run(task_id)
                 return True
             except sqlite3.Error as e:
                 logger.error(f"更新定时任务失败: {e}")
@@ -323,6 +333,7 @@ class ScheduledTaskService:
             try:
                 self.conn.execute('DELETE FROM scheduled_tasks WHERE id = ?', (task_id,))
                 self.conn.commit()
+                self._clear_cached_run(task_id)
                 return True
             except sqlite3.Error as e:
                 logger.error(f"删除定时任务失败: {e}")
@@ -376,9 +387,18 @@ class ScheduledTaskService:
             # 窗口设置为30秒，容忍调度器5秒检查间隔的延迟（最多6次检查机会）
             in_execution_window = 0 <= time_since_prev <= 30
 
+            # 防止同一计划触发时间被重复执行（内存缓存）
+            if in_execution_window:
+                cached_prev = self._get_cached_run(task.id)
+                if cached_prev is not None and cached_prev == prev_run_local:
+                    return False
+
             # 如果从未运行过，只有在执行窗口内才运行
             if task.last_run is None or not task.last_run.strip():
-                return in_execution_window
+                if in_execution_window:
+                    self._set_cached_run(task.id, prev_run_local)
+                    return True
+                return False
 
             # 解析最后运行时间（数据库存储的是 UTC 时间）
             try:
@@ -399,10 +419,32 @@ class ScheduledTaskService:
             prev_run_utc = prev_run_local - utc_offset
 
             # 比较两个 UTC 时间：如果上次应该运行的时间在最后运行时间之后，且当前在执行窗口内，说明需要运行
-            return prev_run_utc > last_run_utc and in_execution_window
+            should_fire = prev_run_utc > last_run_utc and in_execution_window
+            if should_fire:
+                self._set_cached_run(task.id, prev_run_local)
+            return should_fire
         except Exception as e:
             logger.error(f"检查任务 {task.id} 运行时间失败: {e}")
             return False
+
+    def _get_cached_run(self, task_id: int) -> Optional[datetime]:
+        with self._run_cache_lock:
+            cached = self._last_scheduled_run.get(task_id)
+            if not cached:
+                return None
+            prev_run_local, cached_at = cached
+            if time.time() - cached_at > self._CACHE_TTL_SECONDS:
+                self._last_scheduled_run.pop(task_id, None)
+                return None
+            return prev_run_local
+
+    def _set_cached_run(self, task_id: int, prev_run_local: datetime):
+        with self._run_cache_lock:
+            self._last_scheduled_run[task_id] = (prev_run_local, time.time())
+
+    def _clear_cached_run(self, task_id: int):
+        with self._run_cache_lock:
+            self._last_scheduled_run.pop(task_id, None)
 
     def _row_to_task(self, row: tuple) -> ScheduledTask:
         """

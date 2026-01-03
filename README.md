@@ -188,7 +188,6 @@ class Config(BaseSettings):
 
 **配置 (.env)**：
 ```env
-HTTP_API_ENABLED=true    # 启用 HTTP API
 HTTP_API_HOST=0.0.0.0    # 监听地址
 HTTP_API_PORT=8000       # 监听端口
 ```

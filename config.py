@@ -51,18 +51,7 @@ class Config(BaseSettings):
     OPENAI_MAX_TOKENS: int = 500
     OPENAI_TEMPERATURE: float = 0.7
 
-    # 定时任务配置
-    # 示例:
-    # [
-    #     {"type": "daily", "time": "09:00", "content": "早安！"},
-    #     {"type": "interval", "seconds": 3600, "command": "ss", "params": ""}
-    # ]
-    SCHEDULED_TASKS: list[dict] = [
-        {"type": "interval", "seconds": 3600, "command": "ss"}
-    ]
-
-    # HTTP API 服务配置
-    HTTP_API_ENABLED: bool = True
+    # HTTP API 服务配置（默认启用）
     HTTP_API_HOST: str = "0.0.0.0"
     HTTP_API_PORT: int = 8000
     HTTP_API_TOKEN: str = ""  # Bearer Token 认证，为空则不启用认证

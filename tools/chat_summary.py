@@ -92,7 +92,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 群聊总结</h1>
+            <h1>$title</h1>
             <div class="meta">
                 <span>📅 $date</span>
                 <span>💬 $msg_count 条消息</span>
@@ -292,6 +292,26 @@ def summarize_with_llm(
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _get_group_display_name(db_path: str, group_id: str) -> str:
+    try:
+        from src.utils.wechat_chatlog import WeChatDBReader
+    except Exception:
+        return ""
+
+    reader = None
+    try:
+        reader = WeChatDBReader(db_path)
+        return reader.get_group_display_name(group_id)
+    except Exception:
+        return ""
+    finally:
+        if reader:
+            try:
+                reader.close()
+            except Exception:
+                pass
+
+
 def markdown_to_html(md_text: str) -> str:
     """将 Markdown 转换为 HTML"""
     try:
@@ -350,7 +370,14 @@ def markdown_to_html(md_text: str) -> str:
         return '\n'.join(html_lines)
 
 
-def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, output_path: str) -> bool:
+def render_to_image(
+    summary: str,
+    date_str: str,
+    msg_count: int,
+    gen_time: str,
+    output_path: str,
+    group_name: str = ""
+) -> bool:
     """使用 html2image 将总结渲染为图片，自动裁剪空白"""
     try:
         from html2image import Html2Image
@@ -379,7 +406,11 @@ def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, 
 
     # 生成完整 HTML（使用 Template 避免花括号冲突）
     template = Template(HTML_TEMPLATE)
-    full_html = template.substitute(
+    import html
+    safe_group = html.escape(group_name) if group_name else ""
+    title = f"📊 【{safe_group}】群聊总结" if safe_group else "📊 群聊总结"
+    full_html = template.safe_substitute(
+        title=title,
         date=date_str,
         msg_count=msg_count,
         gen_time=gen_time,
@@ -606,10 +637,11 @@ def cmd_summary(args) -> int:
 
     # 生成总结
     print("正在生成总结...")
+    display_group = _get_group_display_name(args.db_path, args.group) or args.group
     try:
         summary = summarize_with_llm(
             messages_text=messages_text,
-            group_name=args.group,
+            group_name=display_group,
             date_str=date_str,
             api_url=config.OPENAI_BASE_URL,
             api_key=config.OPENAI_API_KEY,
@@ -631,7 +663,7 @@ def cmd_summary(args) -> int:
         if not output_path.endswith('.png'):
             output_path += '.png'
 
-        if not render_to_image(summary, date_str, valid_count, gen_time, output_path):
+        if not render_to_image(summary, date_str, valid_count, gen_time, output_path, display_group):
             return 1
 
         print(f"图片已保存到: {output_path}")
@@ -656,13 +688,14 @@ def cmd_summary(args) -> int:
         if not output_path.endswith('.png'):
             output_path += '.png'
 
-        if render_to_image(summary, date_str, valid_count, gen_time, output_path):
+        if render_to_image(summary, date_str, valid_count, gen_time, output_path, display_group):
             print(f"\n图片已保存到: {output_path}")
         else:
             return 1
     else:
         # 输出 Markdown
-        header = f"""# 群聊总结
+        title = f"群聊总结 - {display_group}" if display_group else "群聊总结"
+        header = f"""# {title}
 
 - **日期**: {date_str}
 - **消息数**: {valid_count}

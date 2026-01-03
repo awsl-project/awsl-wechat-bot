@@ -423,6 +423,16 @@ class WeChatDBReader:
             chat_rooms.append(chat_room)
         return chat_rooms
 
+    def get_group_display_name(self, group_id: str) -> str:
+        """获取群聊显示名称（优先 remark，其次 nick_name）"""
+        db = self._get_contact_db()
+        cursor = db.cursor()
+        cursor.execute("SELECT nick_name, remark FROM contact WHERE username = ?", (group_id,))
+        row = cursor.fetchone()
+        if row:
+            return row[1] or row[0] or group_id
+        return group_id
+
     def get_contact_name(self, username: str) -> str:
         """获取联系人名称"""
         db = self._get_contact_db()
