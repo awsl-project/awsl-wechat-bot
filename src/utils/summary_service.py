@@ -163,9 +163,12 @@ class SummaryService:
             fetch_messages,
             format_messages_for_llm,
             generate_ranking,
+            extract_overview,
+            build_summary_text,
             summarize_with_llm,
             render_to_image,
-            send_image_to_group
+            send_image_to_group,
+            send_text_to_group
         )
         from config import config as app_config
 
@@ -308,7 +311,9 @@ class SummaryService:
                 logger.info(f"[Summary] LLM 总结成功，长度: {len(summary)}")
 
                 # 合并总结和排行榜
+                overview = extract_overview(summary)
                 summary = summary + "\n\n" + ranking
+                text_message = build_summary_text(overview, ranking, display_group_name)
                 gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                 # 渲染图片（使用绝对路径）
@@ -341,6 +346,15 @@ class SummaryService:
                     image_path=output_image,
                     token=config.token
                 )
+                try:
+                    send_text_to_group(
+                        api_base=config.api_base,
+                        group_name=group.group_name,
+                        message=text_message,
+                        token=config.token
+                    )
+                except Exception as e:
+                    logger.warning(f"[Summary] 文本消息发送失败 [{group.group_name}]: {e}")
 
                 group_result["success"] = True
                 group_result["message"] = "成功"

@@ -212,6 +212,45 @@ def generate_ranking(sender_stats: dict[str, tuple[int, int]], top_n: int = 10) 
     return "\n".join(lines)
 
 
+def extract_overview(summary_md: str) -> str:
+    """从总结 Markdown 中提取“概览”段落"""
+    import re
+
+    lines = summary_md.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^##\s*概览\s*$", line.strip()):
+            start = i + 1
+            break
+    if start is None:
+        return ""
+
+    end = len(lines)
+    for j in range(start, len(lines)):
+        if re.match(r"^##\s+\S", lines[j].strip()):
+            end = j
+            break
+
+    section = "\n".join(lines[start:end]).strip()
+    return section
+
+
+def build_summary_text(overview: str, ranking: str, group_name: str) -> str:
+    """组合发送用的文本消息：概览 + 排行榜"""
+    header = f"【{group_name}】群聊总结" if group_name else "群聊总结"
+    overview_text = overview.strip() if overview and overview.strip() else "（无）"
+    parts = [
+        header,
+        "",
+        "概览：",
+        overview_text,
+        ""
+    ]
+    if ranking.strip():
+        parts.append(ranking.strip())
+    return "\n".join(parts).strip()
+
+
 def summarize_with_llm(
     messages_text: str,
     group_name: str,
@@ -547,6 +586,31 @@ def send_image_to_group(
     return True
 
 
+def send_text_to_group(
+    api_base: str,
+    group_name: str,
+    message: str,
+    token: Optional[str] = None
+) -> bool:
+    """发送文本到群聊"""
+    url = f"{api_base}/api/send"
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    payload = {
+        "group_name": group_name,
+        "message": message
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    return True
+
+
 def cmd_decrypt(args) -> int:
     """解密子命令"""
     print(f"输入路径: {args.input}")
@@ -678,6 +742,18 @@ def cmd_summary(args) -> int:
                 token=args.token
             )
             print("图片发送成功!")
+            overview = extract_overview(summary)
+            text_message = build_summary_text(overview, ranking, display_group)
+            try:
+                send_text_to_group(
+                    api_base=args.api_base,
+                    group_name=args.send,
+                    message=text_message,
+                    token=args.token
+                )
+                print("文本发送成功!")
+            except requests.exceptions.RequestException as e:
+                print(f"警告: 文本发送失败: {e}")
         except requests.exceptions.RequestException as e:
             print(f"错误: 发送图片失败: {e}")
             return 1
