@@ -212,6 +212,24 @@ def generate_ranking(sender_stats: dict[str, tuple[int, int]], top_n: int = 10) 
     return "\n".join(lines)
 
 
+def generate_ranking_text(sender_stats: dict[str, tuple[int, int]], top_n: int = 10) -> str:
+    """生成消息排行榜纯文本"""
+    if not sender_stats:
+        return ""
+
+    sorted_senders = sorted(sender_stats.items(), key=lambda x: x[1][0], reverse=True)[:top_n]
+    rank_icons = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    total_chars = sum(chars for _, chars in sender_stats.values())
+
+    lines = ["发言排行榜:"]
+    for i, (sender, (count, chars)) in enumerate(sorted_senders):
+        icon = rank_icons[i] if i < len(rank_icons) else f"#{i + 1}"
+        lines.append(f"{icon} {sender} - {count} 条 / {chars} 字")
+
+    lines.append(f"总计: {sum(c for c, _ in sender_stats.values())} 条 / {total_chars} 字")
+    return "\n".join(lines)
+
+
 def extract_overview(summary_md: str) -> str:
     """从总结 Markdown 中提取“概览”段落"""
     import re
@@ -235,10 +253,24 @@ def extract_overview(summary_md: str) -> str:
     return section
 
 
+def _strip_markdown(text: str) -> str:
+    import re
+    s = text or ""
+    s = re.sub(r"^\s*#+\s*", "", s, flags=re.MULTILINE)
+    s = re.sub(r"\*\*(.*?)\*\*", r"\1", s)
+    s = re.sub(r"\*(.*?)\*", r"\1", s)
+    s = re.sub(r"`(.*?)`", r"\1", s)
+    s = re.sub(r"^[-*•]\s*", "", s, flags=re.MULTILINE)
+    s = re.sub(r"^\s*\d+\.\s*", "", s, flags=re.MULTILINE)
+    return s.strip()
+
+
 def build_summary_text(overview: str, ranking: str, group_name: str) -> str:
     """组合发送用的文本消息：概览 + 排行榜"""
     header = f"【{group_name}】群聊总结" if group_name else "群聊总结"
-    overview_text = overview.strip() if overview and overview.strip() else "（无）"
+    overview_text = _strip_markdown(overview) if overview else ""
+    if not overview_text:
+        overview_text = "（无）"
     parts = [
         header,
         "",
@@ -246,8 +278,9 @@ def build_summary_text(overview: str, ranking: str, group_name: str) -> str:
         overview_text,
         ""
     ]
-    if ranking.strip():
-        parts.append(ranking.strip())
+    ranking_text = _strip_markdown(ranking) if ranking else ""
+    if ranking_text:
+        parts.append(ranking_text)
     return "\n".join(parts).strip()
 
 
@@ -698,6 +731,7 @@ def cmd_summary(args) -> int:
 
     # 生成排行榜
     ranking = generate_ranking(sender_stats)
+    ranking_text = generate_ranking_text(sender_stats)
 
     # 生成总结
     print("正在生成总结...")
@@ -743,7 +777,7 @@ def cmd_summary(args) -> int:
             )
             print("图片发送成功!")
             overview = extract_overview(summary)
-            text_message = build_summary_text(overview, ranking, display_group)
+            text_message = build_summary_text(overview, ranking_text, display_group)
             try:
                 send_text_to_group(
                     api_base=args.api_base,

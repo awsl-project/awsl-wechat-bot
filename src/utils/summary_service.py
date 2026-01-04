@@ -163,6 +163,7 @@ class SummaryService:
             fetch_messages,
             format_messages_for_llm,
             generate_ranking,
+            generate_ranking_text,
             extract_overview,
             build_summary_text,
             summarize_with_llm,
@@ -281,6 +282,7 @@ class SummaryService:
 
                 # 生成排行榜
                 ranking = generate_ranking(sender_stats)
+                ranking_text = generate_ranking_text(sender_stats)
 
                 # 生成总结
                 logger.info("[Summary] 调用 LLM 生成总结...")
@@ -313,7 +315,7 @@ class SummaryService:
                 # 合并总结和排行榜
                 overview = extract_overview(summary)
                 summary = summary + "\n\n" + ranking
-                text_message = build_summary_text(overview, ranking, display_group_name)
+                text_message = build_summary_text(overview, ranking_text, display_group_name)
                 gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                 # 渲染图片（使用绝对路径）
